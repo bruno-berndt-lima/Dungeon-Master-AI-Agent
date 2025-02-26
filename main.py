@@ -25,7 +25,7 @@ def main():
         print(f"❌ Failed to create default game state: {e}")
         sys.exit(1)
     
-    # Add custom state variables, including 'next_agent'
+    # Add custom state variables
     state.update({
         "current_task": "",
         "messages": [],
