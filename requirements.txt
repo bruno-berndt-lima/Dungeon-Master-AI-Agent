@@ -1,0 +1,11 @@
+langchain
+langchain-community
+langchain-ollama
+pymupdf
+langchainhub 
+langchain 
+langgraph 
+tavily-python
+sentence-transformers
+langchain-huggingface
+langchain-chroma

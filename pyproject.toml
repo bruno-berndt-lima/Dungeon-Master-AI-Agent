@@ -1,0 +1,12 @@
+[project]
+name = "ai_dungeon_master"
+version = "0.1.0"
+description = "An AI Dungeon Master"
+
+[tool.pytest]
+pythonpath = [
+    "."
+]
+testpaths = [
+    "tests"
+] 
