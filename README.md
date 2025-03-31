@@ -24,7 +24,7 @@ The project is built using:
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/ai-dungeon-master.git
+git clone https://github.com/bruno-berndt-lima/Dungeon-Master-AI-Agent.git
 cd ai-dungeon-master
 
 # Install dependencies
