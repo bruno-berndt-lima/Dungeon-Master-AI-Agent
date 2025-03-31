@@ -43,3 +43,23 @@ class BaseAgent(ABC):
             metadata=metadata or {}
         )
         self.logger.log_interaction(interaction)
+
+    def _get_latest_message(self, state: GameState) -> str:
+        """Extracts the latest message content from the state.
+        
+        Args:
+            state (GameState): The current game state
+            
+        Returns:
+            str: The content of the latest message or empty string if none found
+        """
+        if "messages" in state and state["messages"]:
+            latest = state["messages"][-1]
+            if isinstance(latest, dict) and "content" in latest:
+                return latest["content"]
+            elif hasattr(latest, "content"):
+                return latest.content
+            return str(latest)
+        elif "current_task" in state:
+            return state["current_task"]
+        return ""

@@ -21,37 +21,4 @@ class DungeonMaster(BaseAgent):
 
     def process_task(self, state: GameState) -> Command[Literal["supervisor"]]:
         """Processes a game-related task."""
-        
-        # Extract the current task or context from the state
-        current_task = state.get("current_task", "")
-        
-        # Prepare the prompt for the LLM
-        prompt = f"{self.system_prompt}\n\nTask: {current_task}"
-
-        try:
-            # Generate a response using the LLM
-            response = str(self.llm.invoke(prompt))
-
-            # Log the interaction
-            self._log_interaction(
-                query=current_task,
-                response=response,
-                metadata={"context": state.get("context", {})}
-            )
-
-            # Add response to messages
-            state["messages"].append(AIMessage(content=response, name="dungeon_master"))
-
-            # Return to supervisor
-            return Command(
-                goto="supervisor",
-                update={
-                    "next_agent": "supervisor",
-                    "game_state": state["game_state"],
-                    "messages": state["messages"]
-                }
-            )
-            
-        except Exception as e:
-            print(f"Dungeon Master processing error: {str(e)}")
-            return Command(goto=END)
+        pass

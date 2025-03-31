@@ -74,118 +74,117 @@ class DiceRollerAgent(BaseAgent):
         # Always return to supervisor after rolling dice
         return Command(goto="supervisor", update=updated_state)
     
-    def _get_latest_message(self, state: GameState) -> str:
-        """Extracts the latest message content from the state."""
-        if "messages" in state and state["messages"]:
-            latest = state["messages"][-1]
-            if hasattr(latest, "content"):
-                return latest.content
-            return str(latest)
-        elif "current_task" in state:
-            return state["current_task"]
-        return ""
     
     def _parse_dice_request(self, message: str) -> Tuple[str, int, bool, bool, str]:
-        """Parse the dice request using regex patterns.
+        """Parse the dice request using LLM to extract structured information.
         
         Returns:
             Tuple with (dice_notation, modifier, has_advantage, has_disadvantage, description)
         """
-        message = message.lower()
+        # Use a specialized prompt with examples to guide the LLM's understanding
+        parse_prompt = """
+        Extract the specific dice roll information from this request.
+
+        EXAMPLES:
+        For "Roll 1d20+5 for attack":
+        {{
+            "dice_notation": "1d20",
+            "modifier": 5,
+            "has_advantage": false,
+            "has_disadvantage": false,
+            "description": "attack"
+        }}
+
+        For "Roll 2d6 with advantage for stealth check":
+        {{
+            "dice_notation": "2d6",
+            "modifier": 0,
+            "has_advantage": true,
+            "has_disadvantage": false,
+            "description": "stealth check"
+        }}
+
+        For "Roll 1d20 + 2d6 for damage":
+        {{
+            "dice_notation": "1d20+2d6",
+            "modifier": 0,
+            "has_advantage": false,
+            "has_disadvantage": false,
+            "description": "damage"
+        }}
+
+        NOW PARSE THIS REQUEST: {message}
+
+        ONLY respond with the JSON object, no explanation.
+        """
         
-        # Extract dice notation patterns (2d6, d20, etc.)
-        dice_notation = ""
+        # Call the LLM for parsing
+        parse_messages = [
+            {"role": "system", "content": "You parse dice roll requests into exact dice notation, modifier values, and other attributes."},
+            {"role": "user", "content": parse_prompt.format(message=message)}
+        ]
         
-        # Check for combined notation like "2d8+1d6"
-        combined_pattern = r'(\d*d\d+(?:\s*\+\s*\d*d\d+)+)'
-        combined_match = re.search(combined_pattern, message)
-        
-        if combined_match:
-            # Found a combined notation like "2d8+1d6"
-            dice_notation = combined_match.group(1).replace(" ", "")
-        else:
-            # Look for individual dice patterns and combine them
-            dice_pattern = r'(\d*)d(\d+)'
-            dice_matches = re.findall(dice_pattern, message)
+        try:
+            # Call the LLM
+            response = self.llm.invoke(parse_messages)
+            response_content = response.content if hasattr(response, "content") else str(response)
             
-            if dice_matches:
-                dice_parts = []
-                for count, sides in dice_matches:
-                    count = count if count else "1"
-                    dice_parts.append(f"{count}d{sides}")
-                
-                dice_notation = "+".join(dice_parts)
-        
-        # Default to d20 if no dice found
-        if not dice_notation:
-            dice_notation = "1d20"
-        
-        # Extract modifier (numbers to add/subtract)
-        modifier = 0
-        
-        # Only look for modifiers that are NOT part of dice notation
-        # This prevents 1d6 from "2d8 + 1d6" being interpreted as a +1 modifier
-        clean_message = message
-        
-        # First remove all dice notation to avoid false positives
-        for dice_part in re.findall(r'\d*d\d+', clean_message):
-            clean_message = clean_message.replace(dice_part, "")
-        
-        # Now look for modifiers in the cleaned message
-        modifier_pattern = r'(?:plus|add|with modifier|\+)\s*(\d+)'
-        modifier_match = re.search(modifier_pattern, clean_message)
-        
-        if modifier_match:
-            modifier = int(modifier_match.group(1))
-        
-        # Look for +N pattern that's not followed by "d"
-        plus_pattern = r'\+\s*(\d+)(?!\s*d)'
-        plus_match = re.search(plus_pattern, clean_message)
-        if plus_match:
-            modifier = int(plus_match.group(1))
-        
-        # Check for advantage/disadvantage keywords
-        has_advantage = any(term in message for term in ["advantage", "adv", "take highest", "take higher"])
-        has_disadvantage = any(term in message for term in ["disadvantage", "disadv", "take lowest", "take lower"])
-        
-        # Check for implicit advantage/disadvantage via "roll 2dX take highest/lowest" pattern
-        # This handles cases like "roll 2d20 take the lowest"
-        take_highest_pattern = r'(\d+)d(\d+).*(?:take|use|keep).*(?:high|higher|highest)'
-        take_lowest_pattern = r'(\d+)d(\d+).*(?:take|use|keep).*(?:low|lower|lowest)'
-        
-        highest_match = re.search(take_highest_pattern, message)
-        lowest_match = re.search(take_lowest_pattern, message)
-        
-        # If we find a "roll multiple and take highest/lowest" pattern, handle it
-        if highest_match:
-            count, sides = highest_match.groups()
-            if count == "2":  # Only if rolling exactly 2 dice
-                has_advantage = True
-                # Adjust dice notation to use the base dice
-                dice_notation = re.sub(fr'2d{sides}', f'1d{sides}', dice_notation)
-        
-        if lowest_match:
-            count, sides = lowest_match.groups()
-            if count == "2":  # Only if rolling exactly 2 dice
-                has_disadvantage = True
-                # Adjust dice notation to use the base dice
-                dice_notation = re.sub(fr'2d{sides}', f'1d{sides}', dice_notation)
-        
-        # Extract description (what the roll is for)
-        description = "dice roll"
-        for marker in ["for", "to check", "to see if"]:
-            if marker in message:
-                parts = message.split(marker, 1)
-                if len(parts) > 1:
-                    # Clean up description - remove any stray quotes or brackets
-                    desc = parts[1].strip().rstrip(".")
-                    desc = re.sub(r'[\'\"{}]', '', desc)
-                    description = desc
-                    break
-        
-        print(f"Parsed request: dice={dice_notation}, mod={modifier}, adv={has_advantage}, disadv={has_disadvantage}, desc={description}")
-        
-        return dice_notation, modifier, has_advantage, has_disadvantage, description
+            print(f"Raw LLM response: {response_content}")
+            
+            # Clean up response - remove markdown code block markers and extract JSON
+            response_content = re.sub(r'```(?:json)?\s*|\s*```', '', response_content)
+            json_match = re.search(r'\{.*\}', response_content, re.DOTALL)
+            if json_match:
+                response_content = json_match.group(0)
+            
+            # Parse the response
+            import json
+            parsed = json.loads(response_content)
+            
+            # Extract and validate dice notation
+            dice_notation = parsed.get("dice_notation", "1d20")
+            # Check if it still contains template placeholders
+            if any(char in dice_notation for char in "PQXYpqxy"):
+                # Looks like a template placeholder - extract from original message instead
+                dice_pattern = r'(\d*d\d+(?:\s*\+\s*\d*d\d+)*)'
+                dice_match = re.search(dice_pattern, message)
+                dice_notation = dice_match.group(1).replace(" ", "") if dice_match else "1d20"
+            
+            # Handle modifier - convert string to int if needed
+            modifier = parsed.get("modifier", 0)
+            if isinstance(modifier, str):
+                # Try to extract just the number from strings like "+5"
+                mod_match = re.search(r'[-+]?\d+', modifier)
+                modifier = int(mod_match.group(0)) if mod_match else 0
+            else:
+                modifier = int(modifier) if modifier is not None else 0
+            
+            # Handle advantage/disadvantage
+            has_advantage = bool(parsed.get("has_advantage", False))
+            has_disadvantage = bool(parsed.get("has_disadvantage", False))
+            
+            # Make sure we have a valid description
+            description = parsed.get("description", "")
+            if not description or description == "roll":
+                # Try to extract purpose from the original message
+                for marker in ["for", "to check", "to see if"]:
+                    if marker in message:
+                        parts = message.split(marker, 1)
+                        if len(parts) > 1:
+                            description = parts[1].strip()
+                            break
+                # If still no description, use default
+                if not description or description == "roll":
+                    description = "dice roll"
+            
+            print(f"Parsed request: dice={dice_notation}, mod={modifier}, adv={has_advantage}, disadv={has_disadvantage}, desc={description}")
+            
+            return dice_notation, modifier, has_advantage, has_disadvantage, description
+            
+        except Exception as e:
+            print(f"Error parsing dice request with LLM: {str(e)}")
+            # Safe defaults if parsing fails completely
+            return "1d20", 0, False, False, "dice roll"
     
     def _execute_dice_roll(self, dice_notation: str, modifier: int, 
                           has_advantage: bool, has_disadvantage: bool, 
