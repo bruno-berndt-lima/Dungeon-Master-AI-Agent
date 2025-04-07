@@ -18,14 +18,14 @@ This project creates an AI-powered Dungeon Master that can run tabletop RPG-styl
 The project is built using:
 - LangGraph for agent orchestration and conversation flow
 - LangChain for interfacing with language models
-- [Your chosen LLM] for powering the game's intelligence
+- LLM for powering the game's intelligence
 
 ## Installation
 
 ```bash
 # Clone the repository
 git clone https://github.com/bruno-berndt-lima/Dungeon-Master-AI-Agent.git
-cd ai-dungeon-master
+cd Dungeon-Master-AI-Agent
 
 # Install dependencies
 pip install -r requirements.txt
