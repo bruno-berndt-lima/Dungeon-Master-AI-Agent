@@ -1,4 +1,5 @@
 import random
+import re
 from dataclasses import dataclass
 from typing import List, Tuple
 
@@ -20,16 +21,55 @@ class DiceRoller:
         """
         Parses a dice notation string into a list of (quantity, dice_type) tuples
         Example: "2d6 + 1d8" -> [(2, 6), (1, 8)]
+
+        Flat numeric terms are modifiers, not dice, and are skipped —
+        ``"2d6+3"`` and ``"2d6-1"`` both yield ``[(2, 6)]``. The caller adds the
+        modifier; ``DiceRollerAgent`` extracts it separately.
+
+        Raises:
+            ValueError: on notation this return type cannot represent — a
+                subtracted dice term (``"2d6-1d4"``), a non-positive quantity or
+                die size, or anything unparseable. Returning something plausible
+                for input we do not understand is how a roll silently becomes
+                the wrong roll.
         """
-        dice_parts = dice_str.lower().replace(" ", "").split("+")
+        text = dice_str.lower().replace(" ", "")
+        if not text:
+            raise ValueError("empty dice notation")
+
+        # Split while keeping each term's sign. "2d6-1d4" must be rejected
+        # rather than quietly rolled as "2d6+1d4".
+        terms = re.findall(r"[+-]?[^+-]+", text)
         result = []
-        
-        for part in dice_parts:
-            if "d" in part:
-                quantity, dice_type = part.split("d")
-                quantity = 1 if quantity == "" else int(quantity)
-                result.append((quantity, int(dice_type)))
-            
+
+        for term in terms:
+            negative = term.startswith("-")
+            body = term.lstrip("+-")
+            if not body:
+                raise ValueError(f"malformed dice notation: {dice_str!r}")
+
+            if "d" not in body:
+                if not body.isdigit():
+                    raise ValueError(f"malformed dice notation: {dice_str!r}")
+                continue  # a flat modifier — the caller owns it
+
+            if negative:
+                raise ValueError(
+                    f"cannot subtract dice: {term!r} in {dice_str!r}"
+                )
+
+            quantity_text, _, sides_text = body.partition("d")
+            quantity = 1 if quantity_text == "" else int(quantity_text)
+            sides = int(sides_text)
+
+            if quantity < 1 or sides < 1:
+                raise ValueError(f"cannot roll {quantity}d{sides}")
+
+            result.append((quantity, sides))
+
+        if not result:
+            raise ValueError(f"no dice in notation: {dice_str!r}")
+
         return result
 
     @staticmethod

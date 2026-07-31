@@ -129,25 +129,37 @@ The only agent that combines an LLM with deterministic code, and the design is s
 **the LLM parses, `DiceRoller` rolls.**
 
 **Prompt** — `DICE_ROLLER_PROMPT` describes rolling behavior, but it is only ever
-returned by `get_definition()`. The prompt that actually runs is an inline few-shot
-JSON-extraction prompt inside `_parse_dice_request`, with three worked examples.
+returned by `get_definition()`. The prompt that actually runs is
+`DICE_PARSE_PROMPT`, now in `src/prompts/prompts.py` rather than inlined in the
+class (PR-05, per the `CLAUDE.md` convention).
 
-**Parse step** (`_parse_dice_request`) — asks for a JSON object with `dice_notation`,
-`modifier`, `has_advantage`, `has_disadvantage`, `description`, then defends heavily
-against the model:
+**Parse step** (`_parse_dice_request`) — **reads the request, and only falls back
+to the model when the request names no dice.**
 
-- strips ` ```json ` fences via regex, extracts the first `{...}` block
-- if `dice_notation` contains any of `PQXYpqxy`, treats it as an unsubstituted template
-  placeholder and re-extracts the notation from the raw message with a regex
-- coerces a string `modifier` like `"+5"` to an int
-- if `description` is empty or literally `"roll"`, splits the message on `for` /
-  `to check` / `to see if` to recover intent
-- on any exception, returns `("1d20", 0, False, False, "dice roll")`
+```
+extract_dice_expression("roll 2d8 + 1d6 for damage")  -> ("2d8+1d6", 0)
+extract_roll_flags("roll 1d20 with advantage")        -> (True, False, "")
+```
 
-That defensive stack is a direct artifact of prompting a small local model for JSON.
-PR-05 replaces it with `with_structured_output` over a strict schema — the same
-mechanism PR-04 used for routing, which is available locally on
-`langchain-ollama` 1.1.0.
+A dice expression is a formal language, so a regex reads it exactly where a model
+reads it approximately. Measured: `llama3.2:3b` invented `+1` on `2d8 + 1d6`,
+`+5` on a plain advantage roll, `+2` on `roll for initiative` — see
+KNOWN_ISSUES #27. The model is consulted only for requests like *"roll for
+initiative"*, and even there the modifier comes from the player's words, never
+from the model.
+
+The common path costs **no LLM call at all**: 0.0 s, down from 4.6 s.
+
+What PR-05 deleted, all of it defence against unreliable JSON from a 3B model:
+
+- the markdown-fence regex and first-`{...}` extraction
+- the `PQXYpqxy` check for template placeholders the model copied from the
+  few-shot examples instead of substituting
+- string-to-int coercion of `"+5"`
+- description salvage by splitting on `for` / `to check` / `to see if`
+- **the `("1d20", 0, False, False, "dice roll")` fallback** — the worst of them,
+  because it answered a request nobody made with a confident number. An
+  unreadable request now says so.
 
 **Roll step** (`_execute_dice_roll`) — for advantage/disadvantage, extracts the base
 `NdM`, rolls twice via `DiceRoller.roll_multiple`, takes max/min, adds the modifier,
@@ -165,9 +177,9 @@ It previously did `dict(state)` — a shallow copy — and then appended to
 `updated_state["messages"]`, writing through to the graph's own list. Fixed in
 PR-03.
 
-`DiceRollRequest(Dict[str, Any])` at the top of the file declares class attributes with
-defaults on a `Dict` subclass — it is not a usable structure and is never instantiated.
-It should be a `pydantic.BaseModel` or a `TypedDict`.
+`DiceRollRequest(Dict[str, Any])` — class attributes with defaults on a `Dict`
+subclass, never instantiated — is replaced by `DiceRequest(TypedDict)`, which is
+the actual schema handed to `with_structured_output` (PR-05).
 
 ## `DungeonMaster`
 
