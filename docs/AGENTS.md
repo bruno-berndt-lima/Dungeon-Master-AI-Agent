@@ -87,25 +87,56 @@ unpacking is why this module needs Python 3.11+.
 
 ## `ResearcherAgent`
 
-**Prompt** — `RESEARCHER_PROMPT`: a D&D 5e knowledge assistant, told to answer from
-the official rulebooks, cite page references where possible, format in Markdown, and
-not to invent homebrew.
+**Prompt** — `RESEARCHER_PROMPT`, rewritten in PR-08. It now tells the model that
+each passage carries a source label, to cite the label rather than a remembered
+page number, to say so when the passages do not answer the question, and to stop
+after one short paragraph or five points.
 
-**Mechanism** — builds an LCEL chain in `__init__`:
+**Retrieval** — `retrieve(question)` returns passages plus a metadata dict that
+goes straight into the JSONL log:
 
 ```python
-{"context": self.retriever, "question": RunnablePassthrough()}
-    | ChatPromptTemplate.from_messages([
-          ("system", RESEARCHER_PROMPT + "\n\nRelevant context:\n{context}"),
-          ("user", "{question}")])
-    | self.llm
-    | StrOutputParser()
+{"rag_used": True, "score": 0.09, "relevant": False, "rewritten": True,
+ "rewritten_query": "Can a character use Sneak Attack after Hiding?",
+ "retried_score": 0.302, "citations": ["Player's Handbook, p.175", ...]}
 ```
 
-The whole construction is wrapped in `try/except`; if the vector store can't be
-opened, it prints a warning and sets `self.rag_chain = None`, and `process_task`
-silently falls back to a bare LLM call with no retrieval. The `metadata.rag_used`
-field in the log records which path ran — check it when answers look ungrounded.
+The **relevance gate is the retriever's own score**, not a model call. PR-08 was
+specced to wire `create_retrieval_grader` here; measured, that cost **31.7 s per
+query** and said "yes" every time, because it re-evaluates the same ~1,000-token
+context the answer is about to be generated from. Over this index, on-topic
+questions score 0.363–0.529 and off-topic ones -0.154–0.053, so
+`RELEVANCE_THRESHOLD = 0.25` separates them for free. The threshold is specific
+to this index and embedding model.
+
+Below the threshold, the question is **rewritten once and retried** — never
+looped. Player phrasing and rulebook phrasing sit far apart in embedding space:
+
+| Question | Before | Rewritten to | After |
+|---|---|---|---|
+| "can my guy do the thing where he hides and stabs" | 0.09 | *Can your character use Sneak Attack after successfully hiding?* | 0.302 |
+| "how do i make my dude tougher" | 0.041 | *How can you increase your character's Armor Class, Hit Points, and Constitution?* | 0.439 |
+
+A retry that scores *worse* is discarded.
+
+**Context** — `format_docs` labels every chunk with `[Book, p.N]`. It was defined
+on the class from the first commit and never wired in; the chain interpolated the
+`Document` objects instead, so their `repr` went into the prompt — chunk id,
+`file_path`, `creationDate`, `trapped`, `format` and a dozen other PyMuPDF
+fields. That was **1,653 tokens of prompt for four chunks**, most of it noise,
+and it is why answers cited invented page numbers: `book` and `page_number` were
+in there, buried in a Python dict repr. Clean formatting brings the same four
+chunks to 1,062 tokens.
+
+**Sources are appended deterministically.** The prompt asks for inline citation
+and the model complies about half the time — it cited `Monster Manual, p.165`
+unprompted for one question and nothing at all for the next. `append_sources`
+lists the passages actually retrieved, so the player can always check the answer.
+There is no reason to depend on the model for a fact this code already holds.
+
+**Streaming** — a plain `invoke`, streamed by `main.py` through
+`stream_mode="messages"` like the DM's narration. `num_predict=400` bounds the
+answer; one unbounded answer measured 461 tokens and 181 s.
 
 **Return** — always `Command(goto="__end__")`, on success and on error alike,
 carrying one new `AIMessage`. This terminates the graph invocation, so the
@@ -113,15 +144,11 @@ researcher cannot hand back to the supervisor for a follow-up.
 
 It used to also set `state["next_agent"] = "FINISH"`, which `main.py` read as a
 signal to exit the REPL — so a single rules question ended the session. Both the
-field and that behavior are gone (PR-03). The return annotation, which claimed
-`Command[Literal["supervisor"]]` while returning `__end__`, now matches.
+field and that behavior are gone (PR-03).
 
-`format_docs` is defined on the class but never used; the retriever's `Document`
-list is interpolated into the prompt directly. PR-08 resolves it.
-
-**Default retriever settings** — `vectorstore.as_retriever()` with no arguments:
-similarity search, `k=4`. Tuning `k` and switching to MMR are the cheapest quality
-levers available.
+**If there is no index**, construction logs a warning and `retrieve` returns
+nothing; the agent answers from the model alone and `metadata.rag_used` is
+`False`. Check that field when an answer looks ungrounded.
 
 ## `DiceRollerAgent`
 

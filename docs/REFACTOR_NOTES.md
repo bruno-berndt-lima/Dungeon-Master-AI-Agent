@@ -86,8 +86,10 @@ This is what makes the planned improvements viable without changing provider:
   decoding guarantees a well-*typed* answer, not a *true* one, and the 3B kept
   inventing modifiers that were nowhere in the request (#27). Dice notation is a
   formal language; the right tool was a parser.
-- **PR-08** — `src/pipelines/grader.py` depends on `with_structured_output`,
-  which is why it was never wired in. It works now.
+- **PR-08** — partly. `with_structured_output` does work locally now, so the
+  grader *could* have been wired in. It was measured instead, and deleted: one
+  grading call cost 31.7 s and said "yes" every time. Working is not the same as
+  worth it.
 
 Verify per model rather than assuming: JSON-schema support depends on the model
 having tool-calling ability, not just on the client library. `llama3.2` and
@@ -147,16 +149,26 @@ PR-01 through PR-04 and PR-06 have landed. Of the original plan:
   down from 4.6 s), and no more invented modifiers.
 - **Ingestion** — `scripts/ingest.py`; the index is reproducible from the repo
   for the first time, and `load`/`build` are separate functions that say so.
+- **Researcher** — real citations from chunk metadata, streamed and bounded
+  answers, and a free relevance gate that triggers one query rewrite on a miss.
+  A rules question went from 181 s to ~26 s.
 
 ## What remains
 
-In dependency order — see `SPECS.md` for the executable version.
+**Every PR in `SPECS.md` has landed.** What is left was never scheduled.
 
-1. **PR-08** — researcher citations and corrective RAG. Two things PR-06 turned
-   up belong here: the researcher does not stream (its first token measured
-   **61.8 s** on a cold embedding model), and its answers are unbounded — one
-   rules question measured **147 s**. `dungeon_master` solves both with
-   `num_predict` and a streamed `invoke`; the same treatment applies.
+1. **The `chroma_db/` decision (#20, #23).** Gitignoring the store would stop it
+   dirtying the working tree on every read *and* remove 4,778 chunks of verbatim
+   rulebook text from a public repo — but it breaks out-of-the-box retrieval for
+   anyone without the PDFs. Re-indexing from the CC-BY SRD 5.1 resolves both at
+   once. This is a decision, not a task.
+2. **Citation offsets (#28).** Cited pages are PDF page indices, several behind
+   the printed page number. Worth fixing with the next re-index, since a citation
+   exists to be checked.
+3. **Resume a campaign.** The checkpointer works; `main.py` mints a fresh
+   `thread_id` per run. One CLI flag.
+4. **`src/actors/` (#14).** `Player` and `NPC` are type hints only. Now that
+   `game_state` carries real world state, populating `players` has a point.
 
 ## Still-relevant LangGraph work
 
