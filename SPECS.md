@@ -251,7 +251,15 @@ for structure.
 
 **Branch** `feat/ingest-script`
 
-**In scope** `scripts/ingest.py` (new), `src/data/vectorstore.py`
+**In scope** `scripts/ingest.py` (new), `src/data/vectorstore.py`,
+`src/data/processing.py`
+
+> **Blocked on a 1.x import fix.** `src/data/processing.py` does
+> `from langchain.text_splitter import RecursiveCharacterTextSplitter`, which no
+> longer exists — the class moved to the standalone `langchain_text_splitters`
+> package. Nothing imports the module today, so it does not fail the test suite,
+> but `scripts/ingest.py` cannot work until it is fixed. Found while verifying
+> PR-01 on Python 3.12.
 
 **Task**
 1. Write `scripts/ingest.py` wiring the three existing, correct, never-imported
@@ -290,9 +298,11 @@ for structure.
    `with_structured_output`, which is unreliable on Ollama and reliable on Claude.
 4. Tune retrieval — `as_retriever()` currently takes no arguments (similarity, `k=4`).
    Try `search_type="mmr"`, `k=6–8`.
-5. Delete or wire up the unused `format_docs`; drop `create_rag_chain`, which
-   duplicates the inline chain and needs network access at construction to pull
-   `rlm/rag-prompt` `[#13, #15]`.
+5. Delete `src/pipelines/generator.py` outright. It duplicates the inline chain,
+   needs network access at construction to pull `rlm/rag-prompt`, and its
+   `from langchain import hub` no longer imports on LangChain 1.x — `hub` was
+   removed. Nothing imports the module, so it is dead in every sense `[#13, #15]`.
+   Also delete or wire up `ResearcherAgent.format_docs`, currently unused.
 6. Migrate `grader.py` off `pydantic.v1`.
 
 **Acceptance**
