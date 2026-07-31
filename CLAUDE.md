@@ -23,8 +23,9 @@ python main.py              # interactive REPL; type "quit" or "exit" to leave
 ```
 
 Requires a running Ollama daemon. The `chroma_db/` directory is committed, so
-retrieval works without a re-index — there is no ingestion script in the repo
-(see "Rebuilding the index" below).
+retrieval works out of the box — you do **not** need the source PDFs to run the app.
+They are only required to re-index, and they are gitignored (`Documents/README.md`).
+There is no ingestion script yet; see "Rebuilding the index" below.
 
 **Python version matters.** `src/agents/supervisor.py` uses `Literal[*ROUTING_OPTIONS]`,
 which is PEP 646 syntax requiring **Python 3.11+**. The system Python here is 3.9.6,
@@ -46,7 +47,7 @@ so the module will fail to import on it. Use 3.11 or newer in the venv.
 | `src/prompts/prompts.py` | All system prompts, as module-level string constants |
 | `src/utils/dice.py` | Pure dice notation parser + roller (no LLM) |
 | `src/utils/llm_logger.py` | Appends every agent call to `logs/llm_interactions/*.jsonl` |
-| `Documents/` | The three 5e PDFs (~370 MB, committed) |
+| `Documents/` | Where the three 5e PDFs go. **Gitignored** — supply your own; see `Documents/README.md` |
 | `chroma_db/` | Persisted vector store, 4778 chunks, 384-dim (committed) |
 
 ## Conventions to follow

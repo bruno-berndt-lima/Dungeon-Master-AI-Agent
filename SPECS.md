@@ -33,7 +33,8 @@ Paste the output in the PR body.
 | ID | Branch | Depends on | Parallel-safe with |
 |---|---|---|---|
 | PR-00 | `docs/refactor-baseline` | — | everything |
-| PR-01 | `chore/tooling-and-test-gate` | — | PR-00, PR-07 |
+| PR-00b | `chore/untrack-wotc-pdfs` | — | everything |
+| PR-01 | `chore/tooling-and-test-gate` | — | PR-00b, PR-07 |
 | PR-02 | `refactor/claude-provider` | PR-01 | PR-03, PR-07 |
 | PR-03 | `refactor/state-contract` | PR-01 | PR-02, PR-07 |
 | PR-04 | `refactor/supervisor-structured-routing` | PR-02, PR-03 | PR-05, PR-06 |
@@ -62,6 +63,38 @@ a shared, in-repo source of truth.
 - `CLAUDE.md` at root; `ARCHITECTURE.md`, `AGENTS.md`, `RAG_PIPELINE.md`,
   `KNOWN_ISSUES.md`, `REFACTOR_NOTES.md` under `docs/`
 - No source files touched
+
+---
+
+## PR-00b — Untrack the source rulebooks
+
+**Branch** `chore/untrack-wotc-pdfs`
+
+**In scope** `.gitignore`, `Documents/README.md` (new), `CLAUDE.md`,
+`docs/RAG_PIPELINE.md`, `SPECS.md`
+
+**Task** Stop tracking the three commercial WotC PDFs (128 MB) on a public repo.
+`chroma_db/` stays committed so the app runs without them.
+
+1. `git rm --cached Documents/*.pdf` — untrack, **keep local copies**; they are needed
+   to re-index in PR-07.
+2. Add `Documents/*.pdf` to `.gitignore`.
+3. Add `Documents/README.md` documenting the expected filenames and the SRD 5.1
+   alternative.
+4. Correct the docs that describe the PDFs as committed.
+
+**Acceptance**
+- `git ls-files Documents/` lists only `README.md`
+- The PDFs still exist on disk
+- `python main.py` still retrieves — the app does not depend on the PDFs
+
+**Out of scope — deliberately** Two exposures survive this PR and need separate
+decisions:
+- **History.** The PDFs were added in the initial commit (`d617836`) and stay
+  fetchable by SHA until a `git filter-repo` rewrite plus force-push.
+- **The index itself.** Chroma stores each chunk's text verbatim —
+  `select string_value from embedding_metadata where key='chroma:document'` returns
+  4,778 rows of readable rulebook prose. Only re-indexing from the SRD clears this.
 
 ---
 
@@ -268,6 +301,8 @@ for structure.
 **Acceptance**
 - `python scripts/ingest.py --rebuild` reproduces an index of comparable size
   (~4,778 chunks, 384-dim) from the PDFs in `Documents/`
+- The script fails with a clear message when the PDFs are absent — they are gitignored
+  as of PR-00b, so a fresh clone will not have them
 - `ResearcherAgent` no longer calls `get_vectorstore([])`
 
 ---
@@ -311,8 +346,10 @@ Not scheduled — decide separately.
 - **`src/actors/` activation.** `Player` and `NPC` are type-hint-only today; they
   become useful once the checkpointer from PR-03 makes `players`/`npcs` worth
   populating `[#14]`.
-- **Repository hygiene.** `Documents/` (~370 MB of commercial WotC rulebooks) and
-  `chroma_db/` are committed to a **public** repo, and `.gitignore`'s `*.sqlite` does
-  not match `chroma.sqlite3` `[#20]`. SRD 5.1 is CC-licensed and substitutes for most
-  rules lookup.
+- **History rewrite.** PR-00b untracked the PDFs but they remain in the initial commit
+  and fetchable by SHA. Purging them needs `git filter-repo` plus a force-push, which
+  rewrites every SHA in the repo `[#20]`.
+- **Re-index from SRD 5.1.** `chroma_db/` holds the rulebooks' text verbatim (4,778
+  chunks). Rebuilding the index from the CC-licensed SRD is the only thing that clears
+  that, and it would make ingestion reproducible for anyone cloning the repo.
 - **`env_activation.txt`** is Windows-only and misleading on macOS `[#21]`.
