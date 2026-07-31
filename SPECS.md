@@ -341,6 +341,12 @@ for structure.
 
 Not scheduled — decide separately.
 
+> **Licensing items: consciously deferred 2026-07-31.** The two rulebook-exposure
+> items below were reviewed and left as-is; they are not oversights. Revisit before
+> any of: promoting the repo, adding collaborators, accepting outside contributions,
+> or re-indexing for another reason. The SRD 5.1 switch is cheapest to fold into PR-07
+> while `scripts/ingest.py` is still unwritten — after that it costs a rewrite.
+
 - **Agent registry consolidation.** Adding an agent means editing four places: node
   registration, `AGENT_TYPES`, the supervisor's parse chain, and `SUPERVISOR_PROMPT`.
 - **`src/actors/` activation.** `Player` and `NPC` are type-hint-only today; they
