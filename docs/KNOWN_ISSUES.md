@@ -24,16 +24,16 @@ as items close.
 | 12 | No ingestion entry point | open — PR-07 |
 | 13 | `src/pipelines/` unused | open — PR-08 |
 | 14 | `src/actors/` unused | open — deferred |
-| 15 | Unused declarations | partial — `create_json_llm` → PR-02, `Router` → PR-04, `DiceRollRequest` → PR-05, `format_docs` → PR-08 |
+| 15 | Unused declarations | partial — `create_json_llm` removed (PR-02); `Router` → PR-04, `DiceRollRequest` → PR-05, `format_docs` → PR-08 |
 | 16 | State keys never written | partial — `next_agent` removed (PR-03); five remain |
 | 17 | `tests/` are not tests | **fixed** (PR-01) |
 | 18 | pytest config in the wrong table | **fixed** (PR-01) |
 | 19 | `requirements.txt` unpinned | **fixed** (PR-01) |
 | 20 | Large binaries committed | partial — PDFs untracked (PR-00b); history and index text remain |
 | 21 | `env_activation.txt` is Windows-only | open |
-| 22 | `create_llm` model name does not resolve | open — PR-02 |
+| 22 | `create_llm` model name does not resolve | **fixed** (PR-02) |
 | 23 | Chroma dirties the repo on read | open — unassigned |
-| 24 | Routing costs ~5.7 s per turn | open — PR-04 |
+| 24 | Generation throughput dominates; #6 wastes a full generation | open — PR-04, PR-06 |
 
 Three items were found after the initial audit and are described at the bottom
 of this file: #22, #23, #24.
@@ -214,14 +214,31 @@ collection leaves the repo dirty, and the mutation has had to be reverted out of
 two PRs by hand. Either gitignore the store and make it a build artifact of
 `scripts/ingest.py`, or move it out of the repo entirely. Unassigned.
 
-### 24. Routing costs ~5.7 s of wall clock per turn
+### 24. Generation throughput is the bottleneck — and #6 wastes a whole generation
 
 Measured on the target machine (Intel i9-9980HK, CPU-only — Ollama has no GPU
-path on Intel Macs) with `llama3.2:3b`: a single supervisor routing call takes
-**5.69 s**, and generation runs at **10.4 tok/s**. Because `dice_roller` returns
-to the supervisor, a dice request pays the routing cost twice — roughly 15 s for
-"roll a d20", most of it spent deciding where to send a string that a regex could
-classify instantly. → PR-04.
+path on Intel Macs):
+
+| | `llama3.2:3b` | `qwen2.5:7b` |
+|---|---|---|
+| Cold load (first call after start/eviction) | ~5 s | ~11 s |
+| Warm routing call (system prompt + one turn) | **0.65 s** | — |
+| Generation throughput | **11.4 tok/s** | **5.3 tok/s** |
+
+**A correction.** This issue previously claimed routing cost 5.69 s per turn.
+That number was a cold model load measured on a first call, not steady state.
+Re-measured warm over six distinct routing prompts: mean **0.65 s**, and all six
+routed correctly. Routing is neither slow nor inaccurate on this hardware.
+
+What is slow is **generation**: `qwen2.5:7b` needs ~38 s for a 200-token answer.
+That reframes #6. The cost of `dice_roller` returning to the supervisor is not
+the extra 0.65 s routing call — it is that the supervisor then routes the roll
+*result* to `researcher`, which spends **~40 s generating an answer to a question
+nobody asked**. The wasted generation is ~60× the wasted routing call. → PR-04
+(fix #6), PR-06 (stream, so generation is not experienced as a hang).
+
+Both models stay resident together (2.6 GB + 5.1 GB, verified via `/api/ps`), so
+the per-agent model map costs no swap penalty on a 32 GB machine.
 
 ## Suggested order of attack
 

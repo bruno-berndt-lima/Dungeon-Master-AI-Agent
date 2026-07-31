@@ -11,39 +11,51 @@ Measurements below were taken 2026-07-31 on the target machine: Intel Core
 i9-9980HK, 16 cores, 32 GB RAM, macOS. **Ollama has no GPU path on Intel Macs**
 — the Radeon Pro Vega 20 is not used, so everything is CPU-only.
 
-## The headline problem: latency, not quality
+## The headline problem: tokens generated, not calls made
 
 | Measurement | `llama3.2:3b` | `qwen2.5:7b` |
 |---|---|---|
-| Supervisor routing call (short prompt, short answer) | **5.69 s** | — |
-| Generation throughput | **10.4 tok/s** | **5.1 tok/s** |
+| Cold load (first call after start or eviction) | ~5 s | ~11 s |
+| Warm routing call (system prompt + one turn) | **0.65 s** | — |
+| Generation throughput | **11.4 tok/s** | **5.3 tok/s** |
 
-Routing was *correct* — `"roll 2d10 + 1d6"` returned `dice_roller`. The issue is
-what it costs. Trace a single dice request through the current graph:
+**Correction to an earlier draft of this file.** It reported a 5.69 s supervisor
+routing call and built a whole optimisation program on it. That measurement was a
+**cold model load** taken on a first call, not steady state. Re-measured warm
+across six distinct routing prompts: mean **0.65 s**, min 0.59, max 0.70 — and
+6/6 routed correctly (`"roll 2d10 for damage"` → `dice_roller`, `"I open the
+door"` → `dungeon_master`, `"how does grappling work"` → `researcher`). Routing
+on this hardware is fast and accurate. The throughput numbers were right.
+
+The real trace for a dice request, warm:
 
 ```
-supervisor  (LLM call)   ~5.7s
-dice_roller (LLM parse)  ~3-5s
-supervisor  (LLM call)   ~5.7s     <- because dice_roller returns to supervisor
+supervisor  (route)      ~0.7s
+dice_roller (LLM parse)  ~1-2s
+supervisor  (route)      ~0.7s   <- because dice_roller returns to supervisor
+researcher  (GENERATE)   ~40s    <- routed on the roll result; answers nothing asked
                          ───────
-                         ~15s for "roll a d20"
+                         ~43s, of which 93% is one unwanted generation
 ```
 
-`qwen2.5:7b` runs at exactly half the 3B's throughput — measured, not estimated
-— so a 200-token DM narration takes about **40 seconds**. **On this hardware the
-architecture is the bottleneck, not the model.** Three consequences shape the
+**Output tokens are the whole cost.** A routing call emits three tokens; a
+researcher answer emits two hundred at 5.3 tok/s. Three consequences shape the
 specs:
 
-1. **Every avoidable LLM call is worth removing.** The `dice_roller → supervisor`
-   return edge doubles routing cost for the most common request type. PR-04
-   already plans to fix the spurious researcher hop; it should also let
-   `dice_roller` terminate directly.
-2. **Not every routing decision needs a model.** A dice-notation regex
-   (`\d*d\d+`) catches most dice requests deterministically, in microseconds. A
-   cheap pre-filter ahead of the LLM router would remove ~5.7 s from the most
-   frequent path. Fall through to the LLM only when the regex does not match.
-3. **Streaming is not cosmetic here.** At 10 tok/s, a non-streamed narration
-   feels like a hang. The DM agent must stream.
+1. **Never generate something nobody asked for.** The expensive part of #6 is not
+   the extra routing hop — it is the ~40 s answer the supervisor triggers by
+   routing on the roll *result*. PR-04 letting `dice_roller` terminate directly
+   removes an entire generation, not 0.65 s.
+2. **A regex pre-filter is about determinism, not speed.** `\d*d\d+` classifies
+   dice requests exactly, where a 3B model classifies them *usually*. Worth doing
+   for #5 — but it saves 0.65 s, so do not sell it as a latency fix.
+3. **Streaming is not cosmetic here.** At 5.3 tok/s a 200-token narration takes
+   38 s; un-streamed, that is indistinguishable from a hang. The DM agent must
+   stream. This is the single largest perceived-latency win available.
+
+Both models stay resident simultaneously (2.6 GB + 5.1 GB against 32 GB, verified
+via `/api/ps`), so the per-agent model map costs no swap penalty here. On a
+smaller machine it would, and one model for all four roles would be better.
 
 ## Structured output works locally now
 
@@ -88,10 +100,11 @@ model where quality shows.
 | `researcher` | `qwen2.5:7b` | Grounded answers over retrieved text; quality shows. |
 | `dungeon_master` | `qwen2.5:7b` | Narrative coherence; the one place slowness is tolerable if streamed. |
 
-`src/models/llm.py` currently hardcodes `model_name="Llama3.2"`, which **does not
-resolve** — verified: `ResponseError: model 'Llama3.2' not found (404)`. Ollama
-tags are lowercase and include a size (`llama3.2:3b`). This is almost certainly a
-long-standing bug; nothing in the repo could ever have run against it.
+The map landed in PR-02. `create_llm(agent_type)` resolves it, with
+`DND_MODEL_<AGENT_TYPE>` / `DND_MODEL_DEFAULT` overriding it and `OLLAMA_HOST`
+selecting the daemon. The old hardcoded `model_name` did not resolve at all —
+Ollama tags are lowercase and carry a size suffix — so nothing in this repo could
+ever have run against the default it shipped with.
 
 ## What is already done
 
@@ -103,14 +116,16 @@ PR-01 through PR-03 have landed. Of the original plan:
 - **Real test gate** — 29 tests, mutation-verified.
 - **State contract** — `add_messages` reducer, `next_agent` removed, SQLite
   checkpointer, three real bugs fixed.
+- **Model layer** — per-agent model map, env-overridable models and host, plain
+  language errors for a dead daemon or a missing model. The first commit in this
+  repo's history against which `create_llm()` actually returns a working client.
 
 ## What remains
 
 In dependency order — see `SPECS.md` for the executable version.
 
-1. **PR-02** — modernize the local model layer: fix the model name, per-agent
-   map, configurable host/model via env.
-2. **PR-04** — structured-output routing, plus the latency fixes above.
+1. **PR-04** — structured-output routing, and let `dice_roller` terminate so the
+   graph stops paying for an unwanted researcher generation.
 3. **PR-05** — strict-schema dice parsing; delete the defensive stack.
 4. **PR-06** — implement `DungeonMaster.process_task`, which is still `pass`.
    This is the project's core agent and its largest gap.
