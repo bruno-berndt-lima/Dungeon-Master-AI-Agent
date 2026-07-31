@@ -29,10 +29,10 @@ as items close.
 | 17 | `tests/` are not tests | **fixed** (PR-01) |
 | 18 | pytest config in the wrong table | **fixed** (PR-01) |
 | 19 | `requirements.txt` unpinned | **fixed** (PR-01) |
-| 20 | Large binaries committed | **resolved for the working tree** (PR-09) — index rebuilt from CC-BY SRD; git history still holds the PDFs |
+| 20 | Large binaries committed | **fixed** (PR-10) — history rewritten, indexes gitignored; repo 256 MB → <1 MB |
 | 21 | `env_activation.txt` is Windows-only | open |
 | 22 | `create_llm` model name does not resolve | **fixed** (PR-02) |
-| 23 | Chroma dirties the repo on read | open — unassigned (now cheap to fix: the index is reproducible from `corpus/srd/`) |
+| 23 | Chroma dirties the repo on read | **fixed** (PR-10) — `chroma_db/` is gitignored, so its read-churn is invisible to git |
 | 24 | Generation throughput dominates | **mitigated** — #6 removed (PR-04), narration streams (PR-06) |
 | 25 | A 3B model is not accurate enough to route | **fixed** (PR-04) |
 | 26 | Time-to-first-token is dominated by prompt evaluation | **mitigated** — DM (PR-06) and researcher (PR-08) both tuned |
@@ -246,16 +246,20 @@ reproduce the environment this code was written against.
 the PDFs are commercial Wizards of the Coast rulebooks in a public repository — see
 the licensing note in `docs/RAG_PIPELINE.md`.
 
-**Working tree resolved in PR-09.** The PDFs were untracked in PR-00b, and the
-committed index is now built from the CC-BY SRD 5.1 corpus in `corpus/srd/` —
-verified, 3,082 chunks, all `source = "SRD 5.1"`, no rulebook text and no OCR
-artifacts. The index stays committed, so a clone still retrieves out of the box,
-and it is now reproducible from the repository alone.
+**Fixed across PR-09 and PR-10.**
 
-**Still open: git history.** The PDFs were added in the initial commit
-(`d617836`) and the old rulebook-derived index in every commit up to PR-09. Both
-remain fetchable by SHA until a `git filter-repo` rewrite plus force-push. That
-is a separate, destructive operation — decide it on its own.
+- PR-00b untracked the PDFs; PR-09 rebuilt the index from the CC-BY SRD 5.1
+  corpus in `corpus/srd/` (3,082 chunks, all `source = "SRD 5.1"`).
+- PR-10 rewrote history with `git filter-repo`, dropping `Documents/*.pdf` and
+  `chroma_db/` from all 35 commits, and gitignored both indexes as the build
+  artifacts they are. **256 MB → <1 MB.** Verified: no blob matching
+  `Documents/*.pdf` or `chroma_db` survives anywhere in `--all`.
+
+**One caveat on the remote.** A force-push makes the old commits unreachable,
+but GitHub does not garbage-collect them on a schedule you control — an object
+is still fetchable by its exact SHA until GitHub runs GC. Ask GitHub Support to
+run it if the exposure needs to be provably closed rather than merely
+unreachable.
 
 ### 21. `env_activation.txt` is Windows-only
 

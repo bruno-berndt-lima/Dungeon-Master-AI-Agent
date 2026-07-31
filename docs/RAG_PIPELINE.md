@@ -4,7 +4,7 @@
 
 | Property | Value |
 |---|---|
-| Store | ChromaDB, persisted at `chroma_db/` (committed to git) |
+| Store | ChromaDB at `chroma_db/` — a build artifact, gitignored |
 | Collection | `langchain` |
 | Vectors | 4,778 |
 | Dimensions | 384 |
@@ -12,10 +12,10 @@
 | Index | HNSW, `M=16`, `ef_construction=100`, `ef_search=100` |
 | Embeddings | `sentence-transformers/all-MiniLM-L6-v2` via `HuggingFaceEmbeddings` |
 
-Sources are the three core 5e books: Player's Handbook, Dungeon Master's Guide,
-Monster Manual. The PDFs themselves are **gitignored** and not distributed with the
-repo (`Documents/README.md`); the built index is committed, so retrieval works without
-them.
+The source is the **SRD 5.1** (CC-BY-4.0), vendored in `corpus/srd/`. Build the
+index once with `python scripts/ingest.py` (~35 s, no network). The three
+commercial rulebooks remain an optional second corpus — see
+`Documents/README.md`.
 
 ## Active path
 
@@ -45,10 +45,10 @@ python scripts/ingest.py --source rulebooks --rebuild    # your PDFs -> chroma_d
 python scripts/ingest.py --dry-run                       # chunk without embedding
 ```
 
-`chroma_db/` is committed and built from `corpus/srd/`, which also ships with the
-repository — so the index is reproducible from a clean clone with no PDFs and no
-network. `chroma_db_full/` is gitignored. `DND_CHROMA_DIR` selects which one the
-app reads.
+`corpus/srd/` ships with the repository, so `chroma_db/` is reproducible from a
+clean clone with no PDFs and no network — which is why neither index is
+committed. Both are gitignored build artifacts; `DND_CHROMA_DIR` selects which
+one the app reads.
 
 ### `src/data/srd_loader.py` — the default path
 

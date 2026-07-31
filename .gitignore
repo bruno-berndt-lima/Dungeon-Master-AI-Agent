@@ -109,6 +109,9 @@ venv.bak/
 # Source rulebooks — commercial WotC material, not distributed with this repo.
 # Obtain your own copies and place them here; see Documents/README.md.
 Documents/*.pdf 
-# The rulebook-derived index. Broader coverage than the committed SRD
-# index, but built from commercial books and not redistributable.
+# Vector indexes are build artifacts, not source. `scripts/ingest.py` rebuilds
+# chroma_db/ from corpus/srd/ in ~35s; chroma_db_full/ needs your own rulebook
+# PDFs. Neither belongs in git — the store is also rewritten on every *read*,
+# which used to dirty the working tree constantly (KNOWN_ISSUES #23).
+chroma_db/
 chroma_db_full/

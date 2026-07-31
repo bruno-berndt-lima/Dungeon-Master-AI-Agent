@@ -18,8 +18,8 @@ Then build the second index:
 python scripts/ingest.py --source rulebooks --rebuild
 ```
 
-That writes to `chroma_db_full/`, which is **gitignored** — the committed
-`chroma_db/` stays SRD-only. Point the app at it with:
+That writes to `chroma_db_full/`, leaving the default `chroma_db/` SRD-only.
+Both are gitignored build artifacts. Point the app at it with:
 
 ```bash
 DND_CHROMA_DIR=chroma_db_full python main.py
@@ -27,10 +27,9 @@ DND_CHROMA_DIR=chroma_db_full python main.py
 
 ## You probably don't need them
 
-`chroma_db/` is committed and built from the **SRD 5.1** corpus that ships in
-`corpus/srd/` — 3,082 chunks, 384-dim `all-MiniLM-L6-v2`. Retrieval works out of
-the box, and `python scripts/ingest.py --rebuild` reproduces it from the
-repository alone.
+`python scripts/ingest.py` builds the default index from the **SRD 5.1** corpus
+in `corpus/srd/` in about 35 seconds — 3,082 chunks, 384-dim
+`all-MiniLM-L6-v2` — using nothing but the repository.
 
 These PDFs buy coverage the SRD does not have: ~40 subclasses instead of 12, ~30
 races instead of 9, ~760 monsters instead of 334, and the DMG's guidance. See

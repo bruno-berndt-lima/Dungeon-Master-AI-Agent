@@ -422,6 +422,36 @@ fetchable by SHA; that is a destructive operation and a separate decision.
 
 ---
 
+## PR-10 — Purge the rulebooks from history
+
+**Branch** none — a history rewrite plus a small commit on `main`.
+
+**In scope** every commit (`git filter-repo`), `.gitignore`, docs
+
+**Task**
+1. `git filter-repo --invert-paths --path-glob 'Documents/*.pdf' --path chroma_db`
+   — drop the commercial PDFs and every version of the vector store from all 35
+   commits. `Documents/README.md` and `corpus/srd/` survive.
+2. Gitignore `chroma_db/` and `chroma_db_full/`. The index is a build artifact
+   now that `scripts/ingest.py` reproduces it in ~35 s, and gitignoring it also
+   closes #23 — Chroma rewrites the store on every *read*, which had been
+   dirtying the working tree on every run.
+3. Correct every doc that promised a working index on clone. First run now needs
+   `python scripts/ingest.py`.
+4. Force-push.
+
+**Acceptance**
+- No blob matching `Documents/*.pdf` or `chroma_db` anywhere in `--all`
+- `python scripts/ingest.py && python main.py` works from a fresh clone
+- `pytest` green
+
+**Known limit** A force-push makes the old objects unreachable, not deleted.
+GitHub keeps them fetchable by exact SHA until it runs GC. Ask GitHub Support to
+run it if the exposure must be provably closed. Anyone who cloned or forked
+before the rewrite still has the originals.
+
+---
+
 ## Deferred
 
 Not scheduled — decide separately.

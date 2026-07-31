@@ -38,9 +38,15 @@ constraints pin it:
 comments there explain each. Both torch/numpy pins carry platform markers, so
 they are inert off Intel macOS.
 
-Requires a running Ollama daemon. The `chroma_db/` directory is committed, so retrieval works out of the box, and
-`corpus/srd/` means it can be rebuilt from the repo alone. The commercial
-rulebook PDFs are optional and gitignored — they only buy wider coverage; see
+Requires a running Ollama daemon. **Build the index once before first use** —
+`python scripts/ingest.py` takes ~35 s and needs nothing but the repository:
+
+```bash
+python scripts/ingest.py        # corpus/srd/ -> chroma_db/
+```
+
+`chroma_db/` is a build artifact and gitignored, not committed. The commercial
+rulebook PDFs are optional; they only buy wider coverage — see
 `Documents/README.md` and "Rebuilding the index" below.
 
 **Expect generation to be slow.** Ollama has no GPU path on Intel Macs, so this
@@ -68,7 +74,7 @@ load of 5–11 s. See `docs/KNOWN_ISSUES.md` #24.
 | `src/utils/dice.py` | Pure dice notation parser + roller (no LLM) |
 | `src/utils/llm_logger.py` | Appends every agent call to `logs/llm_interactions/*.jsonl` |
 | `Documents/` | Where the three 5e PDFs go. **Gitignored** — supply your own; see `Documents/README.md` |
-| `chroma_db/` | Persisted vector store, 4778 chunks, 384-dim (committed) |
+| `chroma_db/` | Persisted vector store, 3082 chunks, 384-dim. **Gitignored — build it** |
 
 ## Conventions to follow
 
@@ -102,12 +108,13 @@ load of 5–11 s. See `docs/KNOWN_ISSUES.md` #24.
 ## Rebuilding the index
 
 ```bash
-python scripts/ingest.py --rebuild        # SRD 5.1 -> chroma_db/  (default)
+python scripts/ingest.py                  # SRD 5.1 -> chroma_db/  (first run)
+python scripts/ingest.py --rebuild        # replace an existing index
 python scripts/ingest.py --dry-run        # chunk without embedding
 ```
 
-Reproducible from a clean clone: the corpus is committed under `corpus/srd/`, so
-this needs no PDFs and no network. ~36 s, 3,082 chunks.
+The corpus is committed under `corpus/srd/`, so this needs no PDFs and no
+network. ~35 s, 3,082 chunks.
 
 **Two corpora, two indexes.** The SRD is a subset of the published books, so if
 you own them:
@@ -117,7 +124,7 @@ python scripts/ingest.py --source rulebooks --rebuild   # -> chroma_db_full/
 DND_CHROMA_DIR=chroma_db_full python main.py
 ```
 
-`chroma_db_full/` is gitignored; `chroma_db/` stays SRD-only and committed.
+Both indexes are gitignored build artifacts; `chroma_db/` is the default.
 `corpus/README.md` has the coverage comparison.
 
 Under the hood, SRD path: `load_srd_documents` renders **one document per entry**

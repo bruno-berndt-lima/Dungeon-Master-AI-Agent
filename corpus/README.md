@@ -2,8 +2,9 @@
 
 ## `srd/` — System Reference Document 5.1
 
-The default corpus. Committed, so `python scripts/ingest.py` works on a fresh
-clone with no downloads and no PDFs.
+The default corpus. Committed — so `python scripts/ingest.py` builds a working
+index on a fresh clone with no downloads and no PDFs. The *index* it produces
+(`chroma_db/`) is a build artifact and is gitignored.
 
 ### Attribution
 
