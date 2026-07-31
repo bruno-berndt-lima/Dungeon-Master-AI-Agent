@@ -25,7 +25,6 @@ from src.utils.dice import DiceRoll, DiceRoller
         ("2d6 + 1d8", [(2, 6), (1, 8)]),   # whitespace is stripped
         ("2D6", [(2, 6)]),                 # case-insensitive
         ("1d20+2d6+3d4", [(1, 20), (2, 6), (3, 4)]),
-        ("", []),
     ],
 )
 def test_parse_dice_string(notation, expected):
@@ -41,14 +40,63 @@ def test_parse_drops_bare_numeric_modifier():
     assert DiceRoller.parse_dice_string("2d6+3") == [(2, 6)]
 
 
-@pytest.mark.xfail(
-    raises=ValueError,
-    strict=True,
-    reason="KNOWN_ISSUES #9: parse_dice_string splits only on '+', so a '-' "
-           "modifier lands inside the dice-type token. Fixed in PR-05.",
-)
 def test_parse_negative_modifier():
+    """KNOWN_ISSUES #9. Was a strict xfail from PR-01 until PR-05 fixed it.
+
+    A flat modifier is not dice. `DiceRollerAgent` extracts it separately and
+    adds it to the total, so the parser's job is to skip it — not to fail on it,
+    which is what splitting only on '+' used to cause (`int("6-1")`).
+    """
     assert DiceRoller.parse_dice_string("2d6-1") == [(2, 6)]
+
+
+@pytest.mark.parametrize(
+    "notation,expected",
+    [
+        ("1d20+5", [(1, 20)]),          # trailing modifier, either sign
+        ("1d20-5", [(1, 20)]),
+        ("2d6+3-1", [(2, 6)]),          # several modifiers
+        ("1d20+2d6+3", [(1, 20), (2, 6)]),
+        ("2D6+1D8", [(2, 6), (1, 8)]),
+    ],
+)
+def test_parse_separates_modifiers_from_dice(notation, expected):
+    assert DiceRoller.parse_dice_string(notation) == expected
+
+
+@pytest.mark.parametrize(
+    "notation",
+    [
+        "2d6-1d4",   # cannot be represented as (quantity, sides) tuples
+        "0d6",       # no dice
+        "2d0",       # a die with no faces
+        "",
+        "   ",
+        "hello",
+        "2x6",
+        "+",
+        "d",
+    ],
+)
+def test_parse_rejects_what_it_cannot_represent(notation):
+    """Returning a plausible roll for input we don't understand is how a roll
+    silently becomes the wrong roll."""
+    with pytest.raises(ValueError):
+        DiceRoller.parse_dice_string(notation)
+
+
+def test_subtracted_dice_are_rejected_rather_than_silently_added():
+    """The old parser would have rolled "2d6-1d4" as 2d6+1d4."""
+    with pytest.raises(ValueError, match="cannot subtract dice"):
+        DiceRoller.parse_dice_string("2d6-1d4")
+
+
+def test_roll_multiple_handles_a_negative_modifier_notation():
+    """End to end: the notation that used to raise now rolls."""
+    rolls = DiceRoller.roll_multiple("2d6-1")
+    assert len(rolls) == 1
+    assert rolls[0].dice_type == 6
+    assert 2 <= rolls[0].total <= 12
 
 
 # --------------------------------------------------------------------------- #
@@ -96,7 +144,13 @@ def test_roll_multiple_returns_one_roll_per_term():
 
 
 def test_roll_multiple_empty_notation():
-    assert DiceRoller.roll_multiple("") == []
+    """Changed deliberately in PR-05: this returned [] before.
+
+    Silently returning "no dice" for input the parser did not understand is the
+    same failure mode as defaulting to 1d20 — it looks like a successful call.
+    """
+    with pytest.raises(ValueError):
+        DiceRoller.roll_multiple("")
 
 
 def test_roll_multiple_grand_total():
