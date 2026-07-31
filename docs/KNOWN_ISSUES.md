@@ -19,9 +19,9 @@ as items close.
 | 7 | `GameState` declares no reducers | **fixed** (PR-03) |
 | 8 | `dice_roller` mutates shared caller state | **fixed** (PR-03) |
 | 9 | `parse_dice_string` only splits on `+` | **fixed** (PR-05) |
-| 10 | `Chroma` imported twice | open — PR-07 |
-| 11 | `get_vectorstore` ignores its argument | open — PR-07 |
-| 12 | No ingestion entry point | open — PR-07 |
+| 10 | `Chroma` imported twice | **fixed** (PR-07) |
+| 11 | `get_vectorstore` ignores its argument | **fixed** (PR-07) |
+| 12 | No ingestion entry point | **fixed** (PR-07) |
 | 13 | `src/pipelines/` unused | open — PR-08 |
 | 14 | `src/actors/` unused | open — deferred |
 | 15 | Unused declarations | partial — `create_json_llm` (PR-02), `Router`/`State` (PR-04), `DiceRollRequest` (PR-05); `format_docs` → PR-08 |
@@ -153,6 +153,12 @@ existing store is returned. There's no incremental-add path and no way to tell f
 call site whether documents were indexed. `ResearcherAgent` exploits this by passing
 `[]`. Split into `load_vectorstore()` and `build_vectorstore(docs)`.
 
+**Fixed in PR-07**, exactly that split. Two silent failures now raise: loading a
+missing index (which used to return an empty but usable store, so a missing index
+looked like a working one that retrieved nothing) and building over an existing
+one (Chroma appends — verified, 6 chunks became 7 — so it would have duplicated
+every chunk). `ResearcherAgent` calls `load_vectorstore()`.
+
 ## Dead code
 
 ### 12. No ingestion entry point
@@ -160,6 +166,12 @@ call site whether documents were indexed. `ResearcherAgent` exploits this by pas
 `load_documents` and `split_documents` are complete and correct but imported nowhere.
 The committed `chroma_db/` was built out-of-band and cannot be reproduced from the repo
 without writing the script yourself.
+
+**Fixed in PR-07** — `scripts/ingest.py`, with `--rebuild`, `--dry-run`, and a
+clear message naming any missing PDF. Writing it also surfaced a second dead
+import: `src/data/processing.py` used `langchain.text_splitter`, removed in
+LangChain 1.x. Because nothing imported the module, that break never failed a
+test run.
 
 ### 13. The entire `src/pipelines/` package is unused
 

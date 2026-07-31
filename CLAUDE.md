@@ -11,7 +11,7 @@ All inference currently runs locally through Ollama.
 
 The project **runs**: all four agents are implemented, routing is schema-constrained,
 and narration streams. Some modules are still scaffolding that is never called
-(`src/pipelines/`, `src/actors/`), and there is no ingestion script yet. See
+(`src/pipelines/`, `src/actors/`). See
 `docs/KNOWN_ISSUES.md` before assuming any given path executes.
 
 ## Running it
@@ -40,7 +40,7 @@ they are inert off Intel macOS.
 Requires a running Ollama daemon. The `chroma_db/` directory is committed, so
 retrieval works out of the box — you do **not** need the source PDFs to run the app.
 They are only required to re-index, and they are gitignored (`Documents/README.md`).
-There is no ingestion script yet; see "Rebuilding the index" below.
+See "Rebuilding the index" below.
 
 **Expect generation to be slow.** Ollama has no GPU path on Intel Macs, so this
 is CPU-only: **11.4 tok/s** on `llama3.2:3b`, **5.3 tok/s** on `qwen2.5:7b` — a
@@ -59,6 +59,7 @@ load of 5–11 s. See `docs/KNOWN_ISSUES.md` #24.
 | `src/agents/` | `base_agent` (ABC), `supervisor`, `dungeon_master`, `researcher`, `dice_roller` |
 | `src/actors/` | `Actor` ABC, `Player`, `NPC` — data models, not yet used by the graph |
 | `src/data/` | `loader` (PDF), `processing` (chunking), `vectorstore` (Chroma) |
+| `scripts/ingest.py` | Rebuilds `chroma_db/` from the PDFs; `--rebuild`, `--dry-run` |
 | `src/pipelines/` | `grader`, `rewriter`, `generator` — corrective-RAG parts, currently unused |
 | `src/models/llm.py` | `create_llm(agent_type)` — the single LLM factory; per-agent model map, env overrides |
 | `src/prompts/prompts.py` | All system prompts, as module-level string constants |
@@ -98,23 +99,25 @@ load of 5–11 s. See `docs/KNOWN_ISSUES.md` #24.
 
 ## Rebuilding the index
 
-No script does this. The pieces exist but are never wired together:
-
-```python
-from src.config import DOCUMENT_PATHS, CHROMA_DB_DIRECTORY
-from src.data.loader import load_documents
-from src.data.processing import split_documents
-from src.data.vectorstore import get_vectorstore
-
-docs = load_documents(DOCUMENT_PATHS)          # PyMuPDF, tags book + page_number
-chunks = split_documents(docs)                 # 1000 chars, 200 overlap
-store = get_vectorstore(chunks)                # builds only if chroma_db/ is absent
+```bash
+python scripts/ingest.py              # build; refuses to touch an existing index
+python scripts/ingest.py --rebuild    # replace it
+python scripts/ingest.py --dry-run    # load and chunk without embedding
 ```
 
-`get_vectorstore` returns the existing store and **ignores its `docs` argument**
-whenever `chroma_db/` exists, so delete the directory first to force a rebuild.
-Embeddings are `all-MiniLM-L6-v2` (384-dim) — changing the embedding model
-invalidates the whole index.
+Needs the three PDFs in `Documents/` — gitignored, so supply your own
+(`Documents/README.md`). The script names the missing files rather than failing
+on a traceback. You do **not** need them to run the app; `chroma_db/` is
+committed.
+
+Under the hood: `load_documents` (PyMuPDF, tags `book` + `page_number`) →
+`split_documents` (1000 chars, 200 overlap) → `build_vectorstore`.
+
+`load_vectorstore()` reads and `build_vectorstore(docs, rebuild=...)` writes —
+they used to be one function that silently ignored its `docs` argument whenever
+`chroma_db/` existed. Building over an existing store is refused, because Chroma
+appends and would duplicate every chunk. Embeddings are `all-MiniLM-L6-v2`
+(384-dim); changing the embedding model invalidates the whole index.
 
 ## Testing
 
