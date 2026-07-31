@@ -27,7 +27,13 @@ from langchain_ollama import ChatOllama
 DEFAULT_MODEL = "llama3.2:3b"
 
 AGENT_MODELS = {
-    "supervisor": "llama3.2:3b",      # every turn, pure classification
+    # Routing looks like the cheapest job here, and PR-02 put the 3B on it for
+    # that reason. Measured in PR-04, that was wrong: on a 12-case routing set
+    # llama3.2:3b scored 7/12 and qwen2.5:7b scored 12/12. A routing decision is
+    # ~10 output tokens, so the bigger model costs about 1 s more — against a
+    # misroute costing ~40 s of unwanted generation, or silence when it lands on
+    # an unimplemented agent. Accuracy dominates, not latency.
+    "supervisor": "qwen2.5:7b",       # every turn; must be right more than fast
     "dice_roller": "llama3.2:3b",     # extraction into a fixed schema
     "researcher": "qwen2.5:7b",       # grounded answers over retrieved text
     "dungeon_master": "qwen2.5:7b",   # narrative coherence
