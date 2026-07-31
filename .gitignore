@@ -101,4 +101,8 @@ venv.bak/
 
 # Project specific
 *.db
-*.sqlite 
+*.sqlite
+
+# Source rulebooks — commercial WotC material, not distributed with this repo.
+# Obtain your own copies and place them here; see Documents/README.md.
+Documents/*.pdf 
