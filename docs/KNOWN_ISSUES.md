@@ -10,7 +10,7 @@ as items close.
 
 | # | Issue | Status |
 |---|---|---|
-| 1 | `DungeonMaster.process_task` is a stub | open — PR-06 |
+| 1 | `DungeonMaster.process_task` is a stub | **fixed** (PR-06) |
 | 2 | Needs Python 3.11+ | **fixed** (PR-01) |
 | 3 | Return annotations disagree with returns | **fixed** (PR-03) |
 | 4 | `game_state` dict/string collision | **fixed** (PR-03) |
@@ -25,7 +25,7 @@ as items close.
 | 13 | `src/pipelines/` unused | open — PR-08 |
 | 14 | `src/actors/` unused | open — deferred |
 | 15 | Unused declarations | partial — `create_json_llm` removed (PR-02), `Router` now used and `State` deleted (PR-04); `DiceRollRequest` → PR-05, `format_docs` → PR-08 |
-| 16 | State keys never written | partial — `next_agent` removed (PR-03), `last_response` written (PR-03); four remain |
+| 16 | State keys never written | partial — `last_response` (PR-03) and `game_state` (PR-06) written; three remain |
 | 17 | `tests/` are not tests | **fixed** (PR-01) |
 | 18 | pytest config in the wrong table | **fixed** (PR-01) |
 | 19 | `requirements.txt` unpinned | **fixed** (PR-01) |
@@ -33,11 +33,12 @@ as items close.
 | 21 | `env_activation.txt` is Windows-only | open |
 | 22 | `create_llm` model name does not resolve | **fixed** (PR-02) |
 | 23 | Chroma dirties the repo on read | open — unassigned |
-| 24 | Generation throughput dominates | partial — #6 removed (PR-04); streaming → PR-06 |
+| 24 | Generation throughput dominates | **mitigated** — #6 removed (PR-04), narration streams (PR-06) |
 | 25 | A 3B model is not accurate enough to route | **fixed** (PR-04) |
+| 26 | Time-to-first-token is dominated by prompt evaluation | partial — DM tuned (PR-06); researcher → PR-08 |
 
-Four items were found after the initial audit and are described at the bottom
-of this file: #22, #23, #24, #25.
+Five items were found after the initial audit and are described at the bottom
+of this file: #22, #23, #24, #25, #26.
 
 ## Blocking
 
@@ -47,6 +48,12 @@ of this file: #22, #23, #24, #25.
 instead of a `Command`. The node is registered in the graph and the supervisor can
 route to it, so any narrative input reaches a dead end. This is the project's core
 agent.
+
+**Fixed in PR-06.** It narrates, streams, terminates, and lifts durable facts
+(location, inventory, effects) out of the narration into `game_state`, which is
+fed back as a one-line briefing on the next turn. A test asserts the node returns
+a `Command` even when the model call fails — returning `None` is the failure mode
+that defined this issue.
 
 ### 2. `Literal[*ROUTING_OPTIONS]` requires Python 3.11+
 
@@ -274,6 +281,30 @@ more per turn. A misroute costs ~40 s of unwanted generation, or total silence
 when it lands on `dungeon_master` while that agent is still a stub. Accuracy
 dominates. `AGENT_MODELS["supervisor"]` is now `qwen2.5:7b`; set
 `DND_MODEL_SUPERVISOR=llama3.2:3b` to trade it back. **Fixed** (PR-04).
+
+### 26. Time-to-first-token is dominated by prompt evaluation
+
+Once narration streams, the number a player feels is not throughput but how long
+the screen stays empty. On CPU that is prompt-eval, and it scales with how much
+history goes into the call:
+
+| DM context window | Prompt size | Time to first token |
+|---|---|---|
+| 8 messages | ~478 tok | ~6.6 s |
+| 6 messages | ~413 tok | ~5.2 s |
+| 4 messages | ~348 tok | ~3.6 s |
+| 2 messages | ~283 tok | ~2.2 s |
+
+`CONTEXT_WINDOW` is 4. Continuity survives the cut because the durable facts are
+extracted into `game_state` and replayed as a one-line briefing, so the model
+gets the *state* of the world without re-reading the transcript of it.
+
+Beware measuring this with a repeated identical prompt — Ollama's prompt cache
+returns ~0.4 s and the number is meaningless. The same trap produced the wrong
+routing figure in #24.
+
+Not fully closed: the researcher does not stream (its RAG chain is PR-08's), and
+its first token was measured at **61.8 s** on a cold embedding model.
 
 ## Suggested order of attack
 

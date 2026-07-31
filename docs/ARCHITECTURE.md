@@ -21,19 +21,18 @@
   │ researcher│  │dungeon_  │  │ dice_roller │
   │           │  │ master   │  │             │
   └─────┬─────┘  └────┬─────┘  └──────┬──────┘
-        │             │ goto=         │ goto="__end__"
-        │             │ "supervisor"  │   uses src/utils/dice.py
-        │ goto="__end__"              │
+        │ goto=       │ goto=         │ goto="__end__"
+        │ "__end__"   │ "__end__"     │   uses src/utils/dice.py
         ▼             ▼               ▼
-       END       (PR-06 stub)        END
+       END           END             END
 
   researcher ──▶ Chroma retriever ──▶ prompt ──▶ ChatOllama ──▶ str
   supervisor ──▶ prefilter_route() ──▶ or ──▶ with_structured_output(Router)
+  dungeon_master ──▶ narrate (streams) ──▶ extract scene ──▶ game_state
 ```
 
-Every worker terminates the turn. `dungeon_master` is the one exception, and only
-because it is still an unimplemented stub — PR-06 makes it terminate too. Nothing
-routes back into the supervisor, so a turn runs at most one routing decision.
+**Every worker terminates the turn.** Nothing routes back into the supervisor, so
+a turn runs exactly one routing decision and one worker.
 
 There are **no `add_edge` calls**. `create_game_graph()` registers four nodes and
 sets `supervisor` as the entry point; all traversal is driven by each node returning
@@ -49,7 +48,9 @@ destinations from the return type annotation on `process_task`.
    state; every later turn passes only `{"messages": [...], "current_task": ...}`
    and lets the checkpointer supply the rest.
 
-3. `game_graph.invoke(turn, config=config)` enters the `supervisor` node.
+3. `game_graph.stream(turn, config=config, stream_mode="messages")` enters the
+   `supervisor` node. `main.py` streams rather than invokes so narration appears
+   token by token — see "Streaming" below.
 
 4. **`GameSupervisor.process_task`** routes in two stages.
 
@@ -75,15 +76,40 @@ destinations from the return type annotation on `process_task`.
    - **`dice_roller`** — LLM-parses the request into structured fields, rolls with the
      pure `DiceRoller` utility, returns `Command(goto="__end__")` with one new
      `AIMessage`. It used to return to the supervisor; see below.
-   - **`dungeon_master`** — `process_task` is `pass`. Returns `None`. This node cannot
-     currently execute successfully.
+   - **`dungeon_master`** — narrates the world's response, streaming as it goes,
+     then makes a second structured call to lift durable facts (location,
+     inventory, effects) into `game_state`. Returns `Command(goto="__end__")`.
 
 6. Every agent call writes one line to `logs/llm_interactions/llm_log_<YYYY-MM-DD>.jsonl`
    with `timestamp`, `agent`, `query`, `response`, `metadata`.
 
-7. Back in `main.py`, only the messages added by this turn are printed. The loop
-   continues until the user types `quit` or `exit` — no agent can end the session
-   on their behalf.
+7. Back in `main.py`, anything already printed live is skipped and the rest of
+   this turn's messages are rendered whole. The loop continues until the user
+   types `quit` or `exit` — no agent can end the session on their behalf.
+
+## Streaming
+
+`main.py` consumes `stream_mode="messages"`, which yields `(chunk, metadata)` as
+tokens are produced anywhere in the graph. No agent contains streaming code: a
+plain `llm.invoke()` inside a node is routed through LangChain's streaming path
+whenever a consumer is listening, so the tokens surface on their own.
+
+Three filters make the stream readable, and each corresponds to a bug found while
+building it:
+
+- **`isinstance(chunk, AIMessageChunk)`** — the mode emits both per-token chunks
+  *and* the finished `AIMessage` a node writes to state. Without this every
+  narration prints twice.
+- **`langgraph_node in STREAMING_NODES`** — the supervisor's routing call and the
+  dice parse emit tokens too. Neither is for the player.
+- **`"internal" not in tags`** — a single node can make several calls. The DM
+  narrates and then extracts world state as JSON; both carry the same node name,
+  so the second is tagged at the call site. Without this the player sees raw JSON
+  spliced onto the end of the story.
+
+Measured on the target machine: first token ~3.6 s, against ~40 s to wait for a
+finished narration. The researcher does not stream yet — its RAG chain belongs to
+PR-08.
 
 **The `dice_roller → supervisor` return edge is gone (PR-04).** It used to mean a
 dice request took two supervisor turns, and the 2025-03-31 log shows what that
@@ -103,7 +129,7 @@ output can never become the thing being routed. A dice request now measures
 | `messages` | `Annotated[Sequence[BaseMessage], add_messages]` | full conversation |
 | `current_task` | `str` | latest user input |
 | `active_agent` | `str` | set by the supervisor on each route |
-| `game_state` | `Dict[str, Any]` | world state; stays a dict |
+| `game_state` | `Dict[str, Any]` | world state; stays a dict. Written by `dungeon_master`: `location`, `inventory`, `effects` |
 | `players` / `npcs` | `Dict[str, Player/NPC]` | always `{}` — `src/actors/` is unused |
 | `current_speaker` | `str` | never set |
 | `turn_order` | `List[str]` | always `[]` |

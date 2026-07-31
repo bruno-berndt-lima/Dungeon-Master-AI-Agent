@@ -9,8 +9,9 @@ routes player input to specialist agents (narrator, rules researcher, dice rolle
 Rules retrieval is RAG over the three core 5e rulebooks, indexed in a local ChromaDB.
 All inference currently runs locally through Ollama.
 
-The project is a **working prototype, not a finished app**. Several modules are
-scaffolding that is never called, and the graph does not fully wire up. See
+The project **runs**: all four agents are implemented, routing is schema-constrained,
+and narration streams. Some modules are still scaffolding that is never called
+(`src/pipelines/`, `src/actors/`), and there is no ingestion script yet. See
 `docs/KNOWN_ISSUES.md` before assuming any given path executes.
 
 ## Running it
@@ -51,7 +52,7 @@ load of 5–11 s. See `docs/KNOWN_ISSUES.md` #24.
 
 | Path | Role |
 |---|---|
-| `main.py` | REPL loop; builds state, invokes the compiled graph |
+| `main.py` | REPL loop; builds state, streams the compiled graph token by token |
 | `src/config.py` | Chroma dir, PDF paths, embedding model name |
 | `src/graph/game_orchestrator.py` | Builds the `StateGraph`, registers agent nodes |
 | `src/graph/game_state.py` | `GameState` TypedDict + default factory |
