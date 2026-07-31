@@ -26,9 +26,16 @@ from pathlib import Path
 # Allow `python scripts/ingest.py` from the repo root without installing.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.config import CHROMA_DB_DIRECTORY, DOCUMENT_PATHS, EMBEDDING_MODEL_NAME
+from src.config import (
+    CHROMA_DB_DIRECTORY,
+    DOCUMENT_PATHS,
+    EMBEDDING_MODEL_NAME,
+    FULL_CHROMA_DB_DIRECTORY,
+    SRD_DIRECTORY,
+)
 from src.data.loader import load_documents
 from src.data.processing import CHUNK_OVERLAP, CHUNK_SIZE, split_documents
+from src.data.srd_loader import load_srd_documents
 from src.data.vectorstore import build_vectorstore
 
 
@@ -60,6 +67,14 @@ def main() -> int:
         description="Build the ChromaDB index from the source rulebooks."
     )
     parser.add_argument(
+        "--source",
+        choices=["srd", "rulebooks"],
+        default="srd",
+        help="srd (default): the vendored CC-BY SRD 5.1 corpus, which ships with "
+             "the repository. rulebooks: your own PDFs in Documents/, which are "
+             "gitignored and cover more but cannot be redistributed.",
+    )
+    parser.add_argument(
         "--rebuild",
         action="store_true",
         help="replace an existing index. Without this, an existing index is left "
@@ -73,8 +88,10 @@ def main() -> int:
     )
     parser.add_argument(
         "--persist-directory",
-        default=CHROMA_DB_DIRECTORY,
-        help=f"where to write the index (default: {CHROMA_DB_DIRECTORY})",
+        default=None,
+        help=f"where to write the index. Defaults to {CHROMA_DB_DIRECTORY} for "
+             f"--source srd and {FULL_CHROMA_DB_DIRECTORY} for --source "
+             f"rulebooks, so the two never overwrite each other.",
     )
     parser.add_argument(
         "--chunk-size", type=int, default=CHUNK_SIZE,
@@ -88,10 +105,17 @@ def main() -> int:
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
-    missing = find_missing_documents(DOCUMENT_PATHS)
-    if missing:
-        report_missing(missing)
-        return 1
+    if args.persist_directory is None:
+        args.persist_directory = (
+            CHROMA_DB_DIRECTORY if args.source == "srd"
+            else FULL_CHROMA_DB_DIRECTORY
+        )
+
+    if args.source == "rulebooks":
+        missing = find_missing_documents(DOCUMENT_PATHS)
+        if missing:
+            report_missing(missing)
+            return 1
 
     index_path = Path(args.persist_directory)
     if index_path.exists() and not args.rebuild and not args.dry_run:
@@ -104,13 +128,27 @@ def main() -> int:
 
     started = time.perf_counter()
 
-    print(f"Loading {len(DOCUMENT_PATHS)} documents...")
-    docs = load_documents(DOCUMENT_PATHS)
-    print(f"  {len(docs)} pages")
+    if args.source == "srd":
+        # The SRD loader chunks as it goes: it renders one document per entry and
+        # re-heads every piece with the entry name, which a blind split over
+        # concatenated text cannot do.
+        print(f"Loading the SRD corpus from {SRD_DIRECTORY}...")
+        try:
+            chunks = load_srd_documents(
+                SRD_DIRECTORY, args.chunk_size, args.chunk_overlap
+            )
+        except FileNotFoundError as exc:
+            print(f"{exc}", file=sys.stderr)
+            return 1
+        print(f"  {len(chunks)} chunks")
+    else:
+        print(f"Loading {len(DOCUMENT_PATHS)} documents...")
+        docs = load_documents(DOCUMENT_PATHS)
+        print(f"  {len(docs)} pages")
 
-    print(f"Chunking at {args.chunk_size} chars, {args.chunk_overlap} overlap...")
-    chunks = split_documents(docs, args.chunk_size, args.chunk_overlap)
-    print(f"  {len(chunks)} chunks")
+        print(f"Chunking at {args.chunk_size} chars, {args.chunk_overlap} overlap...")
+        chunks = split_documents(docs, args.chunk_size, args.chunk_overlap)
+        print(f"  {len(chunks)} chunks")
 
     if args.dry_run:
         print(f"\nDry run — nothing written. {time.perf_counter() - started:.1f}s")

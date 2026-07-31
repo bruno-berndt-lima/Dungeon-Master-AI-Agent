@@ -77,9 +77,22 @@ class ResearcherAgent(BaseAgent):
 
     @staticmethod
     def citation_for(doc: Document) -> str:
-        """A human-checkable source label for one chunk."""
-        book = doc.metadata.get("book") or "Unknown source"
-        page = doc.metadata.get("page_number")
+        """A human-checkable source label for one chunk.
+
+        Two corpora produce two shapes. The SRD index carries the entry's own
+        name, which is the better citation — a reader can look up
+        `Monsters: Goblin`, whereas a PDF page index is offset from the printed
+        page number and cannot be checked (KNOWN_ISSUES #28).
+        """
+        metadata = doc.metadata
+        name = metadata.get("name")
+        if name:
+            source = metadata.get("source") or "Unknown source"
+            category = metadata.get("category")
+            return f"{source}, {category}: {name}" if category else f"{source}: {name}"
+
+        book = metadata.get("book") or "Unknown source"
+        page = metadata.get("page_number")
         return f"{book}, p.{page}" if page is not None else book
 
     def format_docs(self, docs: List[Document]) -> str:

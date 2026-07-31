@@ -388,12 +388,47 @@ for structure.
 
 ---
 
+## PR-09 — SRD corpus
+
+**Branch** `feat/srd-corpus`
+
+**In scope** `corpus/srd/` (new), `src/data/srd_loader.py` (new),
+`src/config.py`, `src/data/processing.py`, `scripts/ingest.py`,
+`ResearcherAgent.citation_for`, `chroma_db/`, docs
+
+Not in the original plan. Added 2026-07-31 after the licensing items below were
+taken off the deferred list.
+
+**Task**
+1. Vendor the SRD 5.1 JSON (CC-BY-4.0) under `corpus/srd/`, with the attribution
+   notice the licence requires.
+2. `load_srd_documents` — one document per entry, not per page. Re-head every
+   chunk with the entry name, since Chroma embeds `page_content` and never
+   metadata. Merge entries that are the same text on different classes.
+3. `--source srd|rulebooks` on the ingest script, defaulting to `srd` and
+   writing to `chroma_db/` and `chroma_db_full/` respectively.
+4. Rebuild the committed index from the SRD; gitignore `chroma_db_full/`.
+5. `citation_for` cites SRD chunks by entry name, PDF chunks by page.
+
+**Acceptance**
+- `python scripts/ingest.py --rebuild` reproduces the index from a clean clone,
+  with no PDFs and no network
+- The committed index contains no rulebook text — every chunk `source = "SRD 5.1"`
+- Answers cite `SRD 5.1, Monsters: Goblin`
+- `--source rulebooks` still builds, to `chroma_db_full/`
+
+**Out of scope** Rewriting git history. The PDFs and the old index remain
+fetchable by SHA; that is a destructive operation and a separate decision.
+
+---
+
 ## Deferred
 
 Not scheduled — decide separately.
 
-> **Licensing items: consciously deferred 2026-07-31.** The two rulebook-exposure
-> items below were reviewed and left as-is; they are not oversights. Revisit before
+> **Licensing items: mostly resolved by PR-09 (2026-07-31).** The index is now
+> built from the CC-BY SRD, so the *working tree* is clean. What remains below is
+> the git-history exposure, which needs a `filter-repo` rewrite. Revisit before
 > any of: promoting the repo, adding collaborators, accepting outside contributions,
 > or re-indexing for another reason. The SRD 5.1 switch is cheapest to fold into PR-07
 > while `scripts/ingest.py` is still unwritten — after that it costs a rewrite.

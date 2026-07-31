@@ -12,19 +12,26 @@ To rebuild the vector index yourself, place your own copies here under the filen
 | Player's Handbook | `Players_Handbook_5e.pdf` |
 | Monster Manual | `Monster_Manual_5e.pdf` |
 
-Then run the ingest script (see `SPECS.md` → PR-07).
+Then build the second index:
+
+```bash
+python scripts/ingest.py --source rulebooks --rebuild
+```
+
+That writes to `chroma_db_full/`, which is **gitignored** — the committed
+`chroma_db/` stays SRD-only. Point the app at it with:
+
+```bash
+DND_CHROMA_DIR=chroma_db_full python main.py
+```
 
 ## You probably don't need them
 
-`chroma_db/` is committed and already contains the built index (4,778 chunks,
-384-dim `all-MiniLM-L6-v2`). Retrieval works out of the box without these PDFs.
-You only need them to re-index from scratch — for example after changing the chunking
-strategy or the embedding model.
+`chroma_db/` is committed and built from the **SRD 5.1** corpus that ships in
+`corpus/srd/` — 3,082 chunks, 384-dim `all-MiniLM-L6-v2`. Retrieval works out of
+the box, and `python scripts/ingest.py --rebuild` reproduces it from the
+repository alone.
 
-## Reproducible alternative
-
-The **SRD 5.1** is published by Wizards of the Coast under CC-BY-4.0 and covers most
-of what the rules-lookup path actually needs: core mechanics, conditions, most spells,
-and a large monster set. Switching the corpus to the SRD would make ingestion legally
-reproducible for anyone cloning this repo, at the cost of DMG-specific guidance and
-non-SRD monsters.
+These PDFs buy coverage the SRD does not have: ~40 subclasses instead of 12, ~30
+races instead of 9, ~760 monsters instead of 334, and the DMG's guidance. See
+`corpus/README.md` for the full comparison.

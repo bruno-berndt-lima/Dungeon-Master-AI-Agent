@@ -37,39 +37,78 @@ you which path ran.
 
 ## Ingestion
 
-`scripts/ingest.py` (PR-07) is the entry point. Before it, `loader.py` and
-`processing.py` were complete, correct, and imported by nothing — the committed
-`chroma_db/` was built out of band and could not be reproduced from the repo.
+Two corpora, two loaders, two indexes.
 
 ```bash
-python scripts/ingest.py              # build; refuses to touch an existing index
-python scripts/ingest.py --rebuild    # replace an existing index
-python scripts/ingest.py --dry-run    # load and chunk, skip embedding
+python scripts/ingest.py --rebuild                       # SRD 5.1  -> chroma_db/
+python scripts/ingest.py --source rulebooks --rebuild    # your PDFs -> chroma_db_full/
+python scripts/ingest.py --dry-run                       # chunk without embedding
 ```
 
-It also takes `--persist-directory`, `--chunk-size` and `--chunk-overlap`, so an
-experiment can be built somewhere else without disturbing the committed store.
+`chroma_db/` is committed and built from `corpus/srd/`, which also ships with the
+repository — so the index is reproducible from a clean clone with no PDFs and no
+network. `chroma_db_full/` is gitignored. `DND_CHROMA_DIR` selects which one the
+app reads.
 
-**The PDFs are gitignored**, so a fresh clone has none of them and the script
-says so by name and expected path rather than failing on a stack trace. You do
-not need them to *run* the app.
+### `src/data/srd_loader.py` — the default path
 
-**`src/data/loader.py`** iterates `DOCUMENT_PATHS` (a `{book_name: path}` dict), loads
-each PDF with `PyMuPDFLoader`, and stamps every page's metadata with
-`{"book": <name>, "page_number": doc.metadata["page"]}`. That metadata is the
-foundation for the page citations `RESEARCHER_PROMPT` asks for — but nothing downstream
-reads it. Surfacing `book` and `page_number` in the prompt context is the single
-highest-value retrieval improvement available (PR-08).
+One document per **entry**, not per page. A monster, a spell, a rule section.
 
-**`src/data/processing.py`** — `RecursiveCharacterTextSplitter(chunk_size=1000,
-chunk_overlap=200)`, now imported from `langchain_text_splitters`; the old
-`langchain.text_splitter` path was removed in LangChain 1.x, and because nothing
-imported the module the broken import never failed a test run. Fixed-size
-character splitting on rulebook PDFs breaks stat blocks and spell descriptions
-mid-entry; 4,778 chunks for three books is coarse. The defaults are module
-constants now — changing either invalidates the committed index.
+```
+# Goblin
+Small humanoid (goblinoid), neutral evil
+Armor Class 15 (Leather Armor, Shield)
+Hit Points 7 (2d6)
+...
+Actions
+Scimitar. Melee Weapon Attack: +4 to hit, reach 5 ft., one target.
+Hit: 5 (1d6 + 2) slashing damage.
 
-**`src/data/vectorstore.py`** — split into two functions that say what they do:
+metadata: source="SRD 5.1" category="Monsters" name="Goblin" cr="0.25" type="humanoid"
+```
+
+Three things it does that a blind split cannot:
+
+- **Re-heads every chunk with the entry name.** Chroma embeds `page_content` and
+  never metadata, so a rule section split into four pieces would leave three that
+  cannot be found by name.
+- **Keeps a stat block whole** where it fits, so a creature's actions never land
+  in a different chunk from its hit points.
+- **Merges entries that are the same text on different classes.** `Ability Score
+  Improvement` is stored once per class per level — 50 identical copies. Indexed
+  separately they crowded unrelated results: a query about a goblin's armour
+  class returned three copies of `Fighting Style: Defense` in the top six, and
+  the Goblin only at rank 2. Merged, the Goblin ranks first.
+
+Measured effect of the corpus change on retrieval:
+
+| Query | Rulebook index | SRD index |
+|---|---|---|
+| "how does sneak attack work for rogues" | 0.428 — *a rogue intro page* | **0.590 — the Sneak Attack feature** |
+| "how much damage does a fireball do" | 0.363 — *a monster's spell list* | **0.513 — the Fireball spell** |
+| "how does grappling work in combat" | 0.529 — *the Grappler feat* | 0.335 — **the grappling rules** |
+
+Scores are not comparable across indexes, but the retrieved *content* is: the SRD
+index lands on the entry the question was about.
+
+### `src/data/loader.py` — the PDF path
+
+Iterates `DOCUMENT_PATHS`, loads each PDF with `PyMuPDFLoader`, and stamps every
+page with `{"book": <name>, "page_number": doc.metadata["page"]}`. Still
+supported, still the way to index the full rulebooks — with two caveats recorded
+in KNOWN_ISSUES: the page numbers are PDF indices rather than printed pages
+(#28), and the scans are OCR, so dice notation arrives as `ld6` and `ldl2`.
+
+### `src/data/processing.py`
+
+`RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)`, imported
+from `langchain_text_splitters`; the old `langchain.text_splitter` path was
+removed in LangChain 1.x, and because nothing imported the module the broken
+import never failed a test run. `split_documents` splits `Document`s for the PDF
+path; `split_text` splits raw strings for the SRD loader, which re-heads the
+pieces itself.
+
+### `src/data/vectorstore.py`
 
 ```python
 load_vectorstore()                       # read-only; raises if no index exists
@@ -77,18 +116,14 @@ build_vectorstore(docs, rebuild=False)   # writes; refuses to append silently
 ```
 
 `get_vectorstore(docs)` used to be both, and **silently discarded `docs`** whenever
-the directory existed — which is why `ResearcherAgent` called it with `[]` to hit
-the load branch. It now calls `load_vectorstore()`. Two failure modes that used
-to be invisible now raise:
+the directory existed — which is why `ResearcherAgent` called it with `[]`. It now
+calls `load_vectorstore()`. Two failure modes that used to be invisible now raise:
 
 - **No index on disk.** The old code returned an empty but usable store, so a
   missing index looked like a working one that retrieved nothing.
 - **Building over an existing index.** Chroma appends — verified, 6 chunks
   became 7 — so this would have silently duplicated every chunk. `--rebuild`
   deletes first.
-
-The duplicate `Chroma` import (`langchain_community.vectorstores` then
-`langchain_chroma`, second shadowing the first) is gone.
 
 ## Corrective RAG
 
@@ -145,21 +180,28 @@ consulted" rather than claiming each one was used.
 The embedding model runs locally through `sentence-transformers` and is independent of
 whichever chat model you use. Keep it that way during any refactor: the committed
 `chroma_db/` is built from 384-dimensional `all-MiniLM-L6-v2` vectors, and changing
-the embedder means re-indexing all three books from scratch. Swapping the *chat* model
+the embedder means re-indexing the whole corpus from scratch. Swapping the *chat* model
 (`src/models/llm.py`) touches nothing in the index.
 
-## Licensing note
+## Licensing
 
-The PDFs are gitignored as of PR-00b, but two exposures remain on this **public** repo:
+The default corpus is the **SRD 5.1**, published by Wizards of the Coast under
+**CC-BY-4.0**. It is vendored in `corpus/srd/` and the attribution notice CC-BY
+requires is in `corpus/README.md`. Both the corpus and the index it produces are
+redistributable.
 
-1. **The index contains the books' text verbatim.** Chroma stores each chunk's
-   `page_content` alongside its vector — `select string_value from embedding_metadata
-   where key='chroma:document'` returns 4,778 rows of readable rulebook prose. Removing
-   the PDFs did not remove the text.
-2. **Git history still has the PDFs.** They were added in the initial commit
-   (`d617836`) and remain fetchable by SHA until history is rewritten.
+**What PR-09 cleared.** The committed index used to hold the three rulebooks'
+text verbatim — Chroma stores each chunk's `page_content` next to its vector, so
+`select string_value from embedding_metadata where key='chroma:document'`
+returned 4,778 rows of readable commercial prose. Rebuilt from the SRD, the same
+query returns 3,082 rows, every one of them CC-BY. Verified: all chunks carry
+`source = "SRD 5.1"`, and none match the old OCR artifacts.
 
-The SRD 5.1 is published under CC-BY-4.0 and covers core mechanics, conditions, most
-spells, and a large monster set. Re-indexing from the SRD would clear both exposures
-and make ingestion reproducible for anyone cloning the repo, at the cost of
-DMG-specific guidance and non-SRD monsters.
+**What is still open: git history.** The PDFs were added in the initial commit
+(`d617836`), and the rulebook-derived index is in every commit up to PR-09. Both
+stay fetchable by SHA until a `git filter-repo` rewrite plus force-push — a
+destructive operation on a public repo, and a separate decision. See
+KNOWN_ISSUES #20.
+
+**Building from the rulebooks is still supported** (`--source rulebooks`), but it
+writes to `chroma_db_full/`, which is gitignored. Wider coverage stays local.
