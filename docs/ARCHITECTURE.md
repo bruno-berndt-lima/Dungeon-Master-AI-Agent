@@ -35,73 +35,88 @@ destinations from the return type annotation on `process_task`.
 
 ## A turn, end to end
 
-1. **`main.py`** builds a `GameState` via `create_default_game_state()`, then
-   `.update()`s it with a partly-overlapping set of keys (`current_task`, `messages`,
-   `active_agent`, `game_state`, `players`, `npcs`, `turn_order`, `next_agent`).
-   Note `game_state` is reset from `{}` to the string `"initialized"` here — see
-   `docs/KNOWN_ISSUES.md`.
+1. **`main.py`** opens a SQLite checkpointer, compiles the graph against it, and
+   mints a `thread_id` for the session.
 
-2. User input is appended to `state["messages"]` as `{"role": "user", "content": ...}`
-   and mirrored into `state["current_task"]`.
+2. User input becomes a `HumanMessage`. The first turn seeds the full default
+   state; every later turn passes only `{"messages": [...], "current_task": ...}`
+   and lets the checkpointer supply the rest.
 
-3. `game_graph.invoke(state)` enters the `supervisor` node.
+3. `game_graph.invoke(turn, config=config)` enters the `supervisor` node.
 
-4. **`GameSupervisor.process_task`** short-circuits to `END` if `next`/`next_agent`
-   is `"FINISH"`. Otherwise it flattens the whole message history into an OpenAI-style
-   message list, prepends `SUPERVISOR_PROMPT`, and calls the LLM. The reply is parsed
-   by **substring match** against `"dice_roller"`, `"dungeon_master"`, `"researcher"`,
-   `"finish"` — first hit wins, in that order. Anything unmatched, an exception, or a
-   `None` response defaults to `researcher`. It returns
-   `Command(goto=<agent>, update=state|next_agent)`.
+4. **`GameSupervisor.process_task`** prepends `SUPERVISOR_PROMPT` as a
+   `SystemMessage` to the existing history and calls the LLM. The reply is parsed
+   by **substring match** against `"dice_roller"`, `"dungeon_master"`,
+   `"researcher"`, `"finish"` — first hit wins, in that order. Anything unmatched,
+   an exception, or a `None` response defaults to `researcher`. It returns
+   `Command(goto=<agent>, update={"active_agent": goto})`. Measured cost of this
+   call on the target machine: **~5.7 s** (see `docs/KNOWN_ISSUES.md` #24).
 
 5. The chosen node runs:
 
    - **`researcher`** — RAG. `latest_message → retriever → context → prompt → LLM → str`.
-     Appends an assistant message and returns `Command(goto="__end__")`.
+     Returns `Command(goto="__end__")` with one new `AIMessage`.
    - **`dice_roller`** — LLM-parses the request into structured fields, rolls with the
-     pure `DiceRoller` utility, appends a formatted result, returns
-     `Command(goto="supervisor")`.
+     pure `DiceRoller` utility, returns `Command(goto="supervisor")` with one new
+     `AIMessage`.
    - **`dungeon_master`** — `process_task` is `pass`. Returns `None`. This node cannot
      currently execute successfully.
 
 6. Every agent call writes one line to `logs/llm_interactions/llm_log_<YYYY-MM-DD>.jsonl`
    with `timestamp`, `agent`, `query`, `response`, `metadata`.
 
-7. Back in `main.py`, the returned state is reassigned, `current_task` cleared, and the
-   loop prints every state key before prompting again.
+7. Back in `main.py`, only the messages added by this turn are printed. The loop
+   continues until the user types `quit` or `exit` — no agent can end the session
+   on their behalf.
 
 The `dice_roller → supervisor` return edge means dice requests take at least two
 supervisor turns. The 2025-03-31 log shows the practical consequence: after the roll,
 the supervisor sees the roll result as the newest message and routes to `researcher`,
 which then answers a question nobody asked. The routing prompt has no notion of
-"the request is already satisfied."
+"the request is already satisfied." At ~5.7 s per routing call, that wrong turn is
+also the single most expensive thing the graph does. PR-04 addresses both.
 
 ## State
 
-`src/graph/game_state.py` declares `GameState(TypedDict)` with eleven keys:
+`src/graph/game_state.py` declares `GameState(TypedDict)` with ten keys:
 
-| Key | Declared type | Actually holds |
+| Key | Type | Holds |
 |---|---|---|
-| `messages` | `Sequence[BaseMessage]` | list of plain dicts |
+| `messages` | `Annotated[Sequence[BaseMessage], add_messages]` | full conversation |
 | `current_task` | `str` | latest user input |
-| `active_agent` | `str` | set once, never updated |
-| `game_state` | `dict` | `dict` from the factory, `str` after `main.py` |
-| `players` / `npcs` | `Dict[str, Player/NPC]` | always `{}` |
+| `active_agent` | `str` | set by the supervisor on each route |
+| `game_state` | `Dict[str, Any]` | world state; stays a dict |
+| `players` / `npcs` | `Dict[str, Player/NPC]` | always `{}` — `src/actors/` is unused |
 | `current_speaker` | `str` | never set |
 | `turn_order` | `List[str]` | always `[]` |
-| `last_response` | `str` | never set |
+| `last_response` | `str` | latest agent output |
 | `requires_player_input` | `bool` | never read |
-| `next_agent` | `str` | routing decision, mirrored by supervisor |
 
-`TypedDict` is not enforced at runtime, so mismatches don't raise. Two consequences
-worth knowing before refactoring:
+Two contracts to know before writing a node:
 
-- **No reducers.** Nothing is `Annotated[..., add_messages]`, so a node returning
-  `messages` replaces the list rather than appending to it. Agents work around this
-  by copying the incoming list and re-returning the whole thing.
-- **Two parallel routing channels.** `Command(goto=...)` is what LangGraph actually
-  follows; `state["next_agent"]` is a redundant mirror that only `main.py` and the
-  supervisor's FINISH check read.
+- **`messages` has a reducer; everything else replaces.** A node returns only the
+  messages it produced and `add_messages` appends them. It merges on **message
+  id**, not position — messages read out of state already carry ids, so
+  re-returning them is deduped rather than duplicated. The real hazard is
+  *rebuilding* message objects from scratch, which drops their ids and does
+  duplicate. Both behaviors are pinned in `tests/test_state_contract.py`.
+- **Routing lives only in `Command(goto=...)`.** There is no `next_agent` field.
+  It used to mirror the routing decision, and because `ResearcherAgent` set it to
+  `"FINISH"` on every successful answer, `main.py` exited the REPL after every
+  rules question. Removed in PR-03.
+
+`TypedDict` is not enforced at runtime, so a node can still write a key that
+isn't declared — `tests/test_graph_smoke.py` guards the field set.
+
+## Persistence
+
+`create_game_graph(checkpointer=...)` accepts an optional
+`langgraph.checkpoint.sqlite.SqliteSaver`; `create_sqlite_checkpointer()` builds
+one over a long-lived connection. With a checkpointer attached, every `invoke`
+needs `config={"configurable": {"thread_id": ...}}`, and each turn passes only
+the new message — prior history is restored from the checkpoint. `main.py`
+currently mints a fresh `thread_id` per run, so campaigns are not yet resumed
+across sessions even though the storage supports it.
 
 ## Module responsibilities
 
