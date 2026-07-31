@@ -1,5 +1,5 @@
 from typing import Literal, Dict, Any, List
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import AIMessage, SystemMessage
 from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
@@ -51,8 +51,14 @@ class ResearcherAgent(BaseAgent):
             return ""
         return "\n\n".join(doc.page_content for doc in docs)
     
-    def process_task(self, state: GameState) -> Command[Literal["supervisor"]]:
-        """Retrieves and provides D&D-related information."""
+    def process_task(self, state: GameState) -> Command[Literal["__end__"]]:
+        """Retrieves and provides D&D-related information.
+
+        The annotation says ``__end__`` because that is what this method
+        returns. It previously claimed ``supervisor``; LangGraph derives a
+        node's legal destinations from this annotation, so the mismatch was a
+        latent bug rather than a documentation slip.
+        """
         # Extract the latest message from the state
         latest_message = self._get_latest_message(state)
         
@@ -76,29 +82,17 @@ class ResearcherAgent(BaseAgent):
                 metadata={"rag_used": self.rag_chain is not None}
             )
             
-            # Create a new state dictionary to avoid modifying the original
-            updated_state = dict(state)
-            
-            # Ensure there's a messages list
-            if "messages" not in updated_state:
-                updated_state["messages"] = []
-            
-            # Add the response as a properly formatted dictionary
-            updated_messages = list(updated_state["messages"])
-            updated_messages.append({
-                "role": "assistant",
-                "content": response_content,
-                "name": self.agent_type
-            })
-            
-            # Update the state with the new messages list
-            updated_state["messages"] = updated_messages
-            
-            # Set next_agent to FINISH to terminate the conversation
-            updated_state["next_agent"] = "FINISH"
-            
-            # Return FINISH to end the conversation after providing information
-            return Command(goto="__end__", update=updated_state)
+            # Return only the message this node produced — the add_messages
+            # reducer appends it. Returning the whole history would duplicate it.
+            return Command(
+                goto="__end__",
+                update={
+                    "messages": [
+                        AIMessage(content=response_content, name=self.agent_type)
+                    ],
+                    "last_response": response_content,
+                },
+            )
             
         except Exception as e:
             error_message = f"Error researching D&D information: {str(e)}"
@@ -110,23 +104,12 @@ class ResearcherAgent(BaseAgent):
                 metadata={"error": str(e)}
             )
             
-            # Update state with error message
-            updated_state = dict(state)
-            if "messages" not in updated_state:
-                updated_state["messages"] = []
-            
-            # Add the error message as a properly formatted dictionary
-            updated_messages = list(updated_state["messages"])
-            updated_messages.append({
-                "role": "assistant",
-                "content": error_message,
-                "name": self.agent_type
-            })
-            
-            updated_state["messages"] = updated_messages
-            
-            # Set next_agent to FINISH even on error
-            updated_state["next_agent"] = "FINISH"
-            
-            # Return FINISH to end the conversation
-            return Command(goto="__end__", update=updated_state)
+            return Command(
+                goto="__end__",
+                update={
+                    "messages": [
+                        AIMessage(content=error_message, name=self.agent_type)
+                    ],
+                    "last_response": error_message,
+                },
+            )
