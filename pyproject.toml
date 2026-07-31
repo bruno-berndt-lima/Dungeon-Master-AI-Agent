@@ -14,4 +14,5 @@ testpaths = ["tests"]
 addopts = "-q"
 markers = [
     "integration: requires the full dependency stack and Python 3.11+ (deselect with -m 'not integration')",
+    "slow: builds embeddings or otherwise takes seconds (deselect with -m 'not slow')",
 ]

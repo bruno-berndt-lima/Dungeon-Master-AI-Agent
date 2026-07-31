@@ -37,49 +37,58 @@ you which path ran.
 
 ## Ingestion
 
-**There is no ingestion entry point.** `loader.py` and `processing.py` are complete
-and correct but never imported outside themselves; the committed `chroma_db/` was
-built out-of-band. To rebuild:
+`scripts/ingest.py` (PR-07) is the entry point. Before it, `loader.py` and
+`processing.py` were complete, correct, and imported by nothing — the committed
+`chroma_db/` was built out of band and could not be reproduced from the repo.
 
-```python
-from src.config import DOCUMENT_PATHS
-from src.data.loader import load_documents
-from src.data.processing import split_documents
-from src.data.vectorstore import get_vectorstore
-
-docs   = load_documents(DOCUMENT_PATHS)   # PyMuPDFLoader per book
-chunks = split_documents(docs)            # chunk_size=1000, chunk_overlap=200
-store  = get_vectorstore(chunks)
+```bash
+python scripts/ingest.py              # build; refuses to touch an existing index
+python scripts/ingest.py --rebuild    # replace an existing index
+python scripts/ingest.py --dry-run    # load and chunk, skip embedding
 ```
+
+It also takes `--persist-directory`, `--chunk-size` and `--chunk-overlap`, so an
+experiment can be built somewhere else without disturbing the committed store.
+
+**The PDFs are gitignored**, so a fresh clone has none of them and the script
+says so by name and expected path rather than failing on a stack trace. You do
+not need them to *run* the app.
 
 **`src/data/loader.py`** iterates `DOCUMENT_PATHS` (a `{book_name: path}` dict), loads
 each PDF with `PyMuPDFLoader`, and stamps every page's metadata with
 `{"book": <name>, "page_number": doc.metadata["page"]}`. That metadata is the
 foundation for the page citations `RESEARCHER_PROMPT` asks for — but nothing downstream
 reads it. Surfacing `book` and `page_number` in the prompt context is the single
-highest-value retrieval improvement available.
+highest-value retrieval improvement available (PR-08).
 
 **`src/data/processing.py`** — `RecursiveCharacterTextSplitter(chunk_size=1000,
-chunk_overlap=200)`. Fixed-size character splitting on rulebook PDFs breaks stat blocks
-and spell descriptions mid-entry; 4,778 chunks for three books is coarse.
+chunk_overlap=200)`, now imported from `langchain_text_splitters`; the old
+`langchain.text_splitter` path was removed in LangChain 1.x, and because nothing
+imported the module the broken import never failed a test run. Fixed-size
+character splitting on rulebook PDFs breaks stat blocks and spell descriptions
+mid-entry; 4,778 chunks for three books is coarse. The defaults are module
+constants now — changing either invalidates the committed index.
 
-**`src/data/vectorstore.py`** — `get_vectorstore(docs)`:
+**`src/data/vectorstore.py`** — split into two functions that say what they do:
 
 ```python
-if os.path.exists(CHROMA_DB_DIRECTORY):
-    return Chroma(persist_directory=..., embedding_function=embedding_model)
-return Chroma.from_documents(documents=docs, embedding=..., persist_directory=...)
+load_vectorstore()                       # read-only; raises if no index exists
+build_vectorstore(docs, rebuild=False)   # writes; refuses to append silently
 ```
 
-Two things to know: the `docs` argument is **silently ignored** when the directory
-exists (delete `chroma_db/` to force a rebuild — there is no incremental add path),
-and the module imports `Chroma` twice, from `langchain_community.vectorstores` and
-then from `langchain_chroma`, with the second shadowing the first. Drop the
-`langchain_community` import.
+`get_vectorstore(docs)` used to be both, and **silently discarded `docs`** whenever
+the directory existed — which is why `ResearcherAgent` called it with `[]` to hit
+the load branch. It now calls `load_vectorstore()`. Two failure modes that used
+to be invisible now raise:
 
-`ResearcherAgent` calls `get_vectorstore([])` with an empty list purely to hit the
-load branch — a `load_vectorstore()` / `build_vectorstore(docs)` split would say what
-it means.
+- **No index on disk.** The old code returned an empty but usable store, so a
+  missing index looked like a working one that retrieved nothing.
+- **Building over an existing index.** Chroma appends — verified, 6 chunks
+  became 7 — so this would have silently duplicated every chunk. `--rebuild`
+  deletes first.
+
+The duplicate `Chroma` import (`langchain_community.vectorstores` then
+`langchain_chroma`, second shadowing the first) is gone.
 
 ## The unused corrective-RAG layer
 
