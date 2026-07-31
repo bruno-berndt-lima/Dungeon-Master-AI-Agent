@@ -1,4 +1,4 @@
-# SPECS — Claude refactor
+# SPECS — refactor execution plan
 
 Execution contract for the refactor described in `docs/REFACTOR_NOTES.md`.
 Each spec below is **one branch, one PR**. Read `CLAUDE.md` and
@@ -35,7 +35,7 @@ Paste the output in the PR body.
 | PR-00 | `docs/refactor-baseline` | — | everything |
 | PR-00b | `chore/untrack-wotc-pdfs` | — | everything |
 | PR-01 | `chore/tooling-and-test-gate` | — | PR-00b, PR-07 |
-| PR-02 | `refactor/claude-provider` | PR-01 | PR-03, PR-07 |
+| PR-02 | `refactor/local-model-layer` | PR-01 | PR-03, PR-07 |
 | PR-03 | `refactor/state-contract` | PR-01 | PR-02, PR-07 |
 | PR-04 | `refactor/supervisor-structured-routing` | PR-02, PR-03 | PR-05, PR-06 |
 | PR-05 | `refactor/dice-strict-tool` | PR-02, PR-03 | PR-04, PR-06 |
@@ -129,41 +129,47 @@ test marked `xfail` for it; the fix belongs in PR-05.
 
 ---
 
-## PR-02 — Claude provider
+## PR-02 — Modernize the local model layer
 
-**Branch** `refactor/claude-provider`
+**Branch** `refactor/local-model-layer`
 
-**In scope** `src/models/llm.py`, `requirements.txt`, plus the single
-`create_llm(...)` call line in each of the four agent `__init__` methods
+**In scope** `src/models/llm.py`, plus the single `create_llm(...)` call line in
+each of the four agent `__init__` methods
+
+> **This spec previously described a swap to the Anthropic API.** That direction
+> was withdrawn on 2026-07-31 — the project stays on local models via Ollama.
+> Nothing merged depended on it; PR-00 through PR-03 are provider-agnostic.
 
 **Task**
-1. Replace `ChatOllama` with Claude. Add `anthropic` (and `langchain-anthropic` if
-   staying on LCEL) to requirements.
-2. **Remove the `temperature` parameter entirely.** `temperature`, `top_p`, and
-   `top_k` return 400 on Fable 5 / Opus 5 and on non-default values for Sonnet 5.
-   The current default is `temperature=0`, so this will fail immediately if carried over.
-3. Per-agent model map:
-   | Agent | Model |
-   |---|---|
-   | `dungeon_master` | `claude-fable-5` |
-   | `researcher` | `claude-opus-5` |
-   | `supervisor` | `claude-haiku-4-5` |
-   | `dice_roller` | `claude-haiku-4-5` |
-   `create_llm(agent_type)` resolves the model from this map.
-4. Do **not** send a `thinking` parameter on `claude-fable-5` — thinking is always on
-   there and an explicit `{"type": "disabled"}` returns 400. Control depth with
-   `output_config: {"effort": ...}`. Use `low` or `medium` on the interactive path.
-5. Handle `stop_reason == "refusal"` before reading response content.
-6. Delete `create_json_llm` — unused, and superseded by structured output `[#15]`.
+1. **Fix the model name.** `create_llm` hardcodes `model_name="Llama3.2"`, which
+   does not resolve — verified against a live daemon:
+   `ResponseError: model 'Llama3.2' not found (404)`. Ollama tags are lowercase
+   and carry a size suffix. Nothing in this repo could ever have run against it.
+2. Per-agent model map, resolved by `create_llm(agent_type)`:
+   | Agent | Model | Why |
+   |---|---|---|
+   | `supervisor` | `llama3.2:3b` | Runs every turn; pure classification |
+   | `dice_roller` | `llama3.2:3b` | Extraction into a fixed schema |
+   | `researcher` | `qwen2.5:7b` | Grounded answers; quality shows |
+   | `dungeon_master` | `qwen2.5:7b` | Narrative coherence |
+3. Make the map overridable by environment variable, and honour `OLLAMA_HOST`,
+   so the models can be changed without editing code.
+4. Keep `temperature` — it is valid on Ollama. (The instruction to remove it was
+   an Anthropic-specific constraint from the withdrawn direction.)
+5. Delete `create_json_llm` — unused, and superseded by
+   `with_structured_output` `[#15]`.
+6. Fall back gracefully when the daemon is unreachable: a clear message naming
+   the host, not a raw `ConnectionError` traceback.
 
 **Acceptance**
-- `grep -ri "ollama\|llama3" src/` returns nothing
-- No `temperature`/`top_p`/`top_k` anywhere in `src/`
-- One real call per agent role succeeds against the API
+- `create_llm("supervisor")` returns a client that completes a real call
+- One real call per agent role succeeds against a running daemon
+- `grep -rn "Llama3.2" src/` returns nothing
 - `pytest` still green
 
-**Out of scope** Embeddings. `all-MiniLM-L6-v2` stays — the committed `chroma_db/` is
-built from its 384-dim vectors and swapping it invalidates the index.
+**Out of scope** Embeddings. `all-MiniLM-L6-v2` stays — the committed
+`chroma_db/` is built from its 384-dim vectors and swapping it invalidates the
+index. Also out of scope: the routing-latency work, which belongs to PR-04.
 
 ---
 
@@ -217,8 +223,11 @@ built from its 384-dim vectors and swapping it invalidates the index.
 **In scope** `src/agents/supervisor.py`, `SUPERVISOR_PROMPT` in `src/prompts/prompts.py`
 
 **Task**
-1. Replace the substring-match ladder with structured output over the `Router`
-   TypedDict already declared (and unused) in the module `[#5, #15]`.
+1. Replace the substring-match ladder with
+   `with_structured_output(Router, method="json_schema")` over the `Router`
+   TypedDict already declared (and unused) in the module `[#5, #15]`. Verified
+   available: `langchain-ollama` 1.1.0 exposes `with_structured_output` and
+   `bind_tools`, and `ChatOllama.format` accepts a JSON schema.
 2. Delete the catch-all `goto = "researcher"` fallback. A parse failure should be an
    explicit error path, not silent misrouting.
 3. Fix the post-dice loop: after `dice_roller` returns, the newest message is the roll
@@ -227,7 +236,16 @@ built from its 384-dim vectors and swapping it invalidates the index.
    `logs/llm_interactions/llm_log_2025-03-31.jsonl`. Either give the router an
    explicit "request already satisfied → FINISH" branch, or route on `current_task`
    rather than the full tail.
-4. Delete the unused `class State(MessagesState)`.
+4. **Cut routing latency.** Measured on the target machine: a single
+   `llama3.2:3b` routing call costs **5.69 s**, and a dice request pays it
+   *twice* because `dice_roller` returns to the supervisor — about 15 s for
+   "roll a d20". Two changes:
+   - Add a deterministic pre-filter ahead of the LLM. A dice-notation regex
+     (`\d*d\d+`) resolves most dice requests in microseconds; fall through to
+     the model only when it does not match.
+   - Let `dice_roller` terminate directly instead of returning to the
+     supervisor, removing the second routing call.
+5. Delete the unused `class State(MessagesState)`.
 
 **Acceptance**
 - No substring matching on model output anywhere in the file
@@ -243,11 +261,12 @@ built from its 384-dim vectors and swapping it invalidates the index.
 **In scope** `src/agents/dice_roller.py`, `src/utils/dice.py`, `tests/test_dice.py`
 
 **Task**
-1. Replace `_parse_dice_request` with a strict tool schema
-   (`"strict": True`, `additionalProperties: false`). This deletes the markdown-fence
-   regex, the `PQXYpqxy` placeholder detection, the string-modifier coercion, and the
-   `for`/`to check` description salvage — all of it exists only because Llama 3.2
-   could not emit reliable JSON.
+1. Replace `_parse_dice_request` with
+   `with_structured_output(method="json_schema")` over an explicit schema. This
+   deletes the markdown-fence regex, the `PQXYpqxy` placeholder detection, the
+   string-modifier coercion, and the `for`/`to check` description salvage — all
+   of it exists only because a 3B model in early 2025 could not emit reliable
+   JSON unaided. Schema-constrained decoding removes the need.
 2. Move the inline parse prompt into `src/prompts/prompts.py` as a constant, per the
    convention in `CLAUDE.md`.
 3. Fix `DiceRoller.parse_dice_string` to handle `-` separators; flip the `xfail` test
@@ -281,8 +300,9 @@ schema, `_log_interaction`, and the `Command` return pattern. Follow `Researcher
 for structure.
 
 1. Build narrative context from `state["messages"]` and `state["game_state"]`.
-2. Call the LLM (`claude-fable-5` per PR-02), stream the response — this is the one
-   place a player feels latency.
+2. Call the LLM via `create_llm("dungeon_master")` and **stream** the response.
+   Streaming is not optional here: at ~10 tok/s a 200-token narration takes 20 s,
+   and un-streamed that is indistinguishable from a hang.
 3. Append the narration as an assistant message.
 4. Return `Command(goto=...)` with an annotation that matches what it actually returns.
 5. Update `game_state` when the narration establishes new locations, items, or effects,
@@ -345,7 +365,10 @@ for structure.
    Player phrasing and rulebook phrasing are far apart in embedding space `[#13]`.
 3. **Grading + retry.** Wire `create_retrieval_grader`; on a no-relevant-docs result,
    rewrite and retry once. This was never wired in because it depends on
-   `with_structured_output`, which is unreliable on Ollama and reliable on Claude.
+   `with_structured_output`, which local models did not support reliably in early
+   2025. `langchain-ollama` 1.1.0 supports it — but note each grading call costs a
+   full model round trip (~5 s for a 3B model on this hardware), so grade once per
+   query rather than once per retrieved chunk.
 4. Tune retrieval — `as_retriever()` currently takes no arguments (similarity, `k=4`).
    Try `search_type="mmr"`, `k=6–8`.
 5. Delete `src/pipelines/generator.py` outright. It duplicates the inline chain,

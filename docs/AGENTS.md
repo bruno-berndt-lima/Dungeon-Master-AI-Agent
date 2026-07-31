@@ -33,9 +33,10 @@ Two notes on the contract as written:
 - `initialize_agent` is defined but never called by any subclass, so
   `state["game_state"]` never receives per-agent entries.
 
-`_get_latest_message` is the piece worth reusing: it accepts dict-shaped messages,
-`BaseMessage`-shaped messages, or neither (falling back to `current_task`), which is
-what keeps the mixed message representation from breaking things.
+`_get_latest_message` is the piece worth reusing: it reads the last message's
+`content`, falling back to `current_task` when there is no history yet. Its old
+dict branch is gone — the `add_messages` reducer coerces everything to
+`BaseMessage`, so a plain dict can no longer reach an agent.
 
 ## `GameSupervisor`
 
@@ -43,8 +44,10 @@ what keeps the mixed message representation from breaking things.
 narrative, `researcher` for rules/lore, `dice_roller` for dice, `FINISH` when done)
 ending with *"Return only the agent name."*
 
-**Mechanism** — builds `[system] + [every message in history]`, calls the LLM, then
-parses the response by substring in fixed order:
+**Mechanism** — prepends `SUPERVISOR_PROMPT` as a `SystemMessage` to the existing
+`BaseMessage` history (roles preserved, rather than flattening every turn to
+`role="user"` as it used to), calls the LLM, then parses the response by
+substring in fixed order:
 
 ```python
 if   "dice_roller"    in text: goto = "dice_roller"
@@ -97,13 +100,17 @@ opened, it prints a warning and sets `self.rag_chain = None`, and `process_task`
 silently falls back to a bare LLM call with no retrieval. The `metadata.rag_used`
 field in the log records which path ran — check it when answers look ungrounded.
 
-**Return** — always `Command(goto="__end__")`, on success and on error alike, and it
-also sets `state["next_agent"] = "FINISH"`. This terminates the whole graph
-invocation, so the researcher can never hand back to the supervisor for a follow-up.
+**Return** — always `Command(goto="__end__")`, on success and on error alike,
+carrying one new `AIMessage`. This terminates the graph invocation, so the
+researcher cannot hand back to the supervisor for a follow-up.
 
-**Contract mismatch** — the annotation says `Command[Literal["supervisor"]]` but the
-method returns `goto="__end__"`. Also note `format_docs` is defined on the class but
-never used; the retriever's `Document` list is interpolated into the prompt directly.
+It used to also set `state["next_agent"] = "FINISH"`, which `main.py` read as a
+signal to exit the REPL — so a single rules question ended the session. Both the
+field and that behavior are gone (PR-03). The return annotation, which claimed
+`Command[Literal["supervisor"]]` while returning `__end__`, now matches.
+
+`format_docs` is defined on the class but never used; the retriever's `Document`
+list is interpolated into the prompt directly. PR-08 resolves it.
 
 **Default retriever settings** — `vectorstore.as_retriever()` with no arguments:
 similarity search, `k=4`. Tuning `k` and switching to MMR are the cheapest quality
@@ -138,12 +145,14 @@ Most of it disappears with a provider that supports structured outputs or tool c
 and formats both roll details. Otherwise rolls once, adds the modifier, and appends
 per-die detail. Returns a Markdown string with a 🎲 prefix and a bolded total.
 
-**Return** — `Command(goto="supervisor")`, which is what produces the extra supervisor
-hop described in `docs/ARCHITECTURE.md`.
+**Return** — `Command(goto="supervisor")` with one new `AIMessage`. That return
+edge is what produces the extra supervisor hop described in
+`docs/ARCHITECTURE.md`, and at ~5.7 s per routing call it is the most expensive
+thing in the graph. PR-04 lets this node terminate directly instead.
 
-**Bug worth noting** — unlike the researcher, `process_task` mutates
-`updated_state["messages"].append(...)` on a list that is still shared with the input
-state (`dict(state)` is a shallow copy). It happens to work, but it mutates caller state.
+It previously did `dict(state)` — a shallow copy — and then appended to
+`updated_state["messages"]`, writing through to the graph's own list. Fixed in
+PR-03.
 
 `DiceRollRequest(Dict[str, Any])` at the top of the file declares class attributes with
 defaults on a `Dict` subclass — it is not a usable structure and is never instantiated.
