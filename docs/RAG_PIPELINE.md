@@ -12,8 +12,10 @@
 | Index | HNSW, `M=16`, `ef_construction=100`, `ef_search=100` |
 | Embeddings | `sentence-transformers/all-MiniLM-L6-v2` via `HuggingFaceEmbeddings` |
 
-Sources are the three core 5e books in `Documents/`: Player's Handbook, Dungeon
-Master's Guide, Monster Manual (~370 MB of PDF, also committed).
+Sources are the three core 5e books: Player's Handbook, Dungeon Master's Guide,
+Monster Manual. The PDFs themselves are **gitignored** and not distributed with the
+repo (`Documents/README.md`); the built index is committed, so retrieval works without
+them.
 
 ## Active path
 
@@ -128,8 +130,16 @@ the embedder means re-indexing all three books from scratch. Swapping the *chat*
 
 ## Licensing note
 
-`Documents/` holds the full text of three commercial Wizards of the Coast rulebooks,
-and `chroma_db/` holds their chunked contents. Both are committed to a public
-repository. Worth resolving before doing anything further with the repo publicly —
-the SRD 5.1 is available under Creative Commons and is a drop-in substitute for most
-rules-lookup purposes.
+The PDFs are gitignored as of PR-00b, but two exposures remain on this **public** repo:
+
+1. **The index contains the books' text verbatim.** Chroma stores each chunk's
+   `page_content` alongside its vector — `select string_value from embedding_metadata
+   where key='chroma:document'` returns 4,778 rows of readable rulebook prose. Removing
+   the PDFs did not remove the text.
+2. **Git history still has the PDFs.** They were added in the initial commit
+   (`d617836`) and remain fetchable by SHA until history is rewritten.
+
+The SRD 5.1 is published under CC-BY-4.0 and covers core mechanics, conditions, most
+spells, and a large monster set. Re-indexing from the SRD would clear both exposures
+and make ingestion reproducible for anyone cloning the repo, at the cost of
+DMG-specific guidance and non-SRD monsters.
