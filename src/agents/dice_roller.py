@@ -1,5 +1,5 @@
 from typing import Literal, Dict, Any, List, Optional, Tuple
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import AIMessage, SystemMessage
 from src.utils.llm_logger import LLMLogger, LLMInteraction
 from src.graph.game_state import GameState
 from src.utils.dice import DiceRoller
@@ -45,17 +45,6 @@ class DiceRollerAgent(BaseAgent):
             description
         )
         
-        # Update the state with the result
-        updated_state = dict(state)
-        if "messages" not in updated_state:
-            updated_state["messages"] = []
-            
-        updated_state["messages"].append({
-            "role": "assistant",
-            "content": result_message,
-            "name": self.agent_type
-        })
-        
         # Log the interaction
         self._log_interaction(
             query=latest_message,
@@ -71,8 +60,16 @@ class DiceRollerAgent(BaseAgent):
             }
         )
         
-        # Always return to supervisor after rolling dice
-        return Command(goto="supervisor", update=updated_state)
+        # Return only the message this node produced. The previous version did
+        # `dict(state)` — a shallow copy — and then appended to the caller's own
+        # list, mutating state that belonged to the graph.
+        return Command(
+            goto="supervisor",
+            update={
+                "messages": [AIMessage(content=result_message, name=self.agent_type)],
+                "last_response": result_message,
+            },
+        )
     
     
     def _parse_dice_request(self, message: str) -> Tuple[str, int, bool, bool, str]:

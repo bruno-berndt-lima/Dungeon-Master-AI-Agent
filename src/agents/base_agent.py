@@ -46,20 +46,20 @@ class BaseAgent(ABC):
 
     def _get_latest_message(self, state: GameState) -> str:
         """Extracts the latest message content from the state.
-        
+
+        The ``add_messages`` reducer coerces anything a node returns into a
+        ``BaseMessage``, so entries in ``state["messages"]`` are always message
+        objects by the time an agent reads them — the dict shape this method
+        used to accept can no longer reach here.
+
         Args:
             state (GameState): The current game state
-            
+
         Returns:
-            str: The content of the latest message or empty string if none found
+            str: The content of the latest message, falling back to
+            ``current_task`` when there is no history yet.
         """
-        if "messages" in state and state["messages"]:
-            latest = state["messages"][-1]
-            if isinstance(latest, dict) and "content" in latest:
-                return latest["content"]
-            elif hasattr(latest, "content"):
-                return latest.content
-            return str(latest)
-        elif "current_task" in state:
-            return state["current_task"]
-        return ""
+        messages = state.get("messages")
+        if messages:
+            return getattr(messages[-1], "content", "") or ""
+        return state.get("current_task", "")
