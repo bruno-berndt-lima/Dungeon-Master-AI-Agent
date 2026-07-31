@@ -2,11 +2,16 @@
 name = "ai_dungeon_master"
 version = "0.1.0"
 description = "An AI Dungeon Master"
+# src/agents/supervisor.py uses Literal[*ROUTING_OPTIONS] (PEP 646), which is a
+# syntax error before 3.11. See docs/KNOWN_ISSUES.md #2.
+requires-python = ">=3.11"
 
-[tool.pytest]
-pythonpath = [
-    "."
+# NOTE: pytest reads [tool.pytest.ini_options]. A plain [tool.pytest] table is
+# silently ignored, which is why testpaths/pythonpath had no effect before.
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "integration: requires the full dependency stack and Python 3.11+ (deselect with -m 'not integration')",
 ]
-testpaths = [
-    "tests"
-] 
