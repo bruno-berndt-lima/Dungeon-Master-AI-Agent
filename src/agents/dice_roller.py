@@ -4,6 +4,7 @@ from src.utils.llm_logger import LLMLogger, LLMInteraction
 from src.graph.game_state import GameState
 from src.utils.dice import DiceRoller
 from src.agents.base_agent import BaseAgent
+from langgraph.graph import END
 from langgraph.types import Command
 import re
 from src.prompts.prompts import DICE_ROLLER_PROMPT
@@ -28,7 +29,7 @@ class DiceRollerAgent(BaseAgent):
     def get_definition(self) -> str:
         return self.system_prompt
     
-    def process_task(self, state: GameState) -> Command[Literal["supervisor"]]:
+    def process_task(self, state: GameState) -> Command[Literal["__end__"]]:
         """Processes dice roll requests and returns results."""
         # Extract the dice roll request from the state
         latest_message = self._get_latest_message(state)
@@ -60,11 +61,16 @@ class DiceRollerAgent(BaseAgent):
             }
         )
         
+        # Terminate rather than returning to the supervisor. A roll is a complete
+        # answer, and handing back meant the supervisor re-routed on the roll
+        # *result* and sent it to `researcher` — roughly 40 s of generation, at
+        # 5.3 tok/s, answering a question nobody asked (KNOWN_ISSUES #6).
+        #
         # Return only the message this node produced. The previous version did
         # `dict(state)` — a shallow copy — and then appended to the caller's own
         # list, mutating state that belonged to the graph.
         return Command(
-            goto="supervisor",
+            goto=END,
             update={
                 "messages": [AIMessage(content=result_message, name=self.agent_type)],
                 "last_response": result_message,

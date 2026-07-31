@@ -14,8 +14,8 @@ as items close.
 | 2 | Needs Python 3.11+ | **fixed** (PR-01) |
 | 3 | Return annotations disagree with returns | **fixed** (PR-03) |
 | 4 | `game_state` dict/string collision | **fixed** (PR-03) |
-| 5 | Supervisor routes by substring match | open — PR-04 |
-| 6 | No terminal condition after a dice roll | open — PR-04 |
+| 5 | Supervisor routes by substring match | **fixed** (PR-04) |
+| 6 | No terminal condition after a dice roll | **fixed** (PR-04) |
 | 7 | `GameState` declares no reducers | **fixed** (PR-03) |
 | 8 | `dice_roller` mutates shared caller state | **fixed** (PR-03) |
 | 9 | `parse_dice_string` only splits on `+` | open — PR-05 (pinned by a strict `xfail`) |
@@ -24,8 +24,8 @@ as items close.
 | 12 | No ingestion entry point | open — PR-07 |
 | 13 | `src/pipelines/` unused | open — PR-08 |
 | 14 | `src/actors/` unused | open — deferred |
-| 15 | Unused declarations | partial — `create_json_llm` removed (PR-02); `Router` → PR-04, `DiceRollRequest` → PR-05, `format_docs` → PR-08 |
-| 16 | State keys never written | partial — `next_agent` removed (PR-03); five remain |
+| 15 | Unused declarations | partial — `create_json_llm` removed (PR-02), `Router` now used and `State` deleted (PR-04); `DiceRollRequest` → PR-05, `format_docs` → PR-08 |
+| 16 | State keys never written | partial — `next_agent` removed (PR-03), `last_response` written (PR-03); four remain |
 | 17 | `tests/` are not tests | **fixed** (PR-01) |
 | 18 | pytest config in the wrong table | **fixed** (PR-01) |
 | 19 | `requirements.txt` unpinned | **fixed** (PR-01) |
@@ -33,10 +33,11 @@ as items close.
 | 21 | `env_activation.txt` is Windows-only | open |
 | 22 | `create_llm` model name does not resolve | **fixed** (PR-02) |
 | 23 | Chroma dirties the repo on read | open — unassigned |
-| 24 | Generation throughput dominates; #6 wastes a full generation | open — PR-04, PR-06 |
+| 24 | Generation throughput dominates | partial — #6 removed (PR-04); streaming → PR-06 |
+| 25 | A 3B model is not accurate enough to route | **fixed** (PR-04) |
 
-Three items were found after the initial audit and are described at the bottom
-of this file: #22, #23, #24.
+Four items were found after the initial audit and are described at the bottom
+of this file: #22, #23, #24, #25.
 
 ## Blocking
 
@@ -85,6 +86,12 @@ then `"dungeon_master"`, then `"researcher"`, then `"finish"`. A reply such as
 Small local models routinely wrap the answer in prose. Every failure path
 (no match, exception, `None` response) falls through to `researcher`.
 
+**Fixed in PR-04.** Routing is now `with_structured_output(Router)`, so `next` is
+a `Literal` the model cannot violate — there is no text to substring-match. A
+deterministic pre-filter handles unambiguous dice notation ahead of the model.
+The catch-all `goto = "researcher"` is gone: an unroutable turn ends with an
+explicit message instead of a confident RAG answer to a question nobody asked.
+
 ### 6. No terminal condition after a dice roll
 
 `dice_roller` returns to `supervisor`, which then re-reads the full history. The newest
@@ -93,6 +100,12 @@ the original request. `logs/llm_interactions/llm_log_2025-03-31.jsonl` captures 
 exactly: `roll 2d10 + 1d6` → `dice_roller` → `supervisor` → `researcher`, which then
 answers a rules question nobody asked. `SUPERVISOR_PROMPT` has no concept of "already
 satisfied."
+
+**Fixed in PR-04**, two ways. `dice_roller` now terminates instead of returning
+to the supervisor, and the supervisor routes on `current_task` — what the player
+asked this turn — rather than the message tail, so an agent's own output can
+never become the thing being routed. Verified: `roll 2d10 + 1d6` produces exactly
+one roll and ends, in 4.9 s rather than ~45 s.
 
 ### 7. `GameState` declares no reducers
 
@@ -239,6 +252,28 @@ nobody asked**. The wasted generation is ~60× the wasted routing call. → PR-0
 
 Both models stay resident together (2.6 GB + 5.1 GB, verified via `/api/ps`), so
 the per-agent model map costs no swap penalty on a 32 GB machine.
+
+### 25. A 3B model is not accurate enough to route
+
+PR-02 put `llama3.2:3b` on the supervisor because routing is short and latency
+was assumed to dominate. PR-04 measured it on a 12-case set spanning all four
+destinations:
+
+| Router model | Correct | Mean latency |
+|---|---|---|
+| `llama3.2:3b` | **7/12** | ~1.7 s |
+| `qwen2.5:7b` | **12/12** | ~2.7 s |
+
+Both prompts were tried on the 3B (the original terse one scored 8/12, a rewrite
+with worked examples scored 7/12) — prompt wording was not the lever, model size
+was. An earlier benchmark reporting 6/6 used cases with obvious keyword signals
+and was too easy to be informative.
+
+A routing decision is ~10 output tokens, so the larger model costs about **1 s**
+more per turn. A misroute costs ~40 s of unwanted generation, or total silence
+when it lands on `dungeon_master` while that agent is still a stub. Accuracy
+dominates. `AGENT_MODELS["supervisor"]` is now `qwen2.5:7b`; set
+`DND_MODEL_SUPERVISOR=llama3.2:3b` to trade it back. **Fixed** (PR-04).
 
 ## Suggested order of attack
 

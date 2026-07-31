@@ -12,21 +12,28 @@
           └────────────┬───────────────┘
                        ▼
                  ┌───────────┐
-        ┌────────│ supervisor│◀───────┐
-        │        └─────┬─────┘        │
-        │              │              │ Command(goto="supervisor")
+                 │ supervisor│──── FINISH / unroutable ──▶ END
+                 └─────┬─────┘
+        ┌──────────────┼──────────────┐
    goto │         goto │         goto │
-        ▼              ▼              │
-  ┌───────────┐  ┌──────────┐  ┌──────┴──────┐
+        ▼              ▼              ▼
+  ┌───────────┐  ┌──────────┐  ┌─────────────┐
   │ researcher│  │dungeon_  │  │ dice_roller │
   │           │  │ master   │  │             │
-  └─────┬─────┘  └──────────┘  └─────────────┘
-        │ goto="__end__"           uses
-        ▼                    src/utils/dice.py
-       END
+  └─────┬─────┘  └────┬─────┘  └──────┬──────┘
+        │             │ goto=         │ goto="__end__"
+        │             │ "supervisor"  │   uses src/utils/dice.py
+        │ goto="__end__"              │
+        ▼             ▼               ▼
+       END       (PR-06 stub)        END
 
   researcher ──▶ Chroma retriever ──▶ prompt ──▶ ChatOllama ──▶ str
+  supervisor ──▶ prefilter_route() ──▶ or ──▶ with_structured_output(Router)
 ```
+
+Every worker terminates the turn. `dungeon_master` is the one exception, and only
+because it is still an unimplemented stub — PR-06 makes it terminate too. Nothing
+routes back into the supervisor, so a turn runs at most one routing decision.
 
 There are **no `add_edge` calls**. `create_game_graph()` registers four nodes and
 sets `supervisor` as the entry point; all traversal is driven by each node returning
@@ -44,21 +51,30 @@ destinations from the return type annotation on `process_task`.
 
 3. `game_graph.invoke(turn, config=config)` enters the `supervisor` node.
 
-4. **`GameSupervisor.process_task`** prepends `SUPERVISOR_PROMPT` as a
-   `SystemMessage` to the existing history and calls the LLM. The reply is parsed
-   by **substring match** against `"dice_roller"`, `"dungeon_master"`,
-   `"researcher"`, `"finish"` — first hit wins, in that order. Anything unmatched,
-   an exception, or a `None` response defaults to `researcher`. It returns
-   `Command(goto=<agent>, update={"active_agent": goto})`. Measured cost of this
-   call on the target machine, warm: **~0.65 s** (see `docs/KNOWN_ISSUES.md` #24).
+4. **`GameSupervisor.process_task`** routes in two stages.
+
+   First `prefilter_route()` — a pure function, no model. If the request is
+   unambiguously dice (`"roll 2d10 + 1d6"`, or bare notation like `"2d6+1d8"`)
+   it returns `dice_roller` immediately. It is deliberately conservative: a
+   question opener, or notation used descriptively (`"my sword does 2d6"`),
+   returns `None` and falls through.
+
+   Otherwise `SUPERVISOR_PROMPT` plus **the current request** — not the message
+   tail — goes to `with_structured_output(Router, method="json_schema")`. `next`
+   is a `Literal`, so the model cannot name a node that does not exist. It returns
+   `Command(goto=<agent>, update={"active_agent": goto})`. Warm cost on the target
+   machine: **~2.7 s** on `qwen2.5:7b` (`docs/KNOWN_ISSUES.md` #24, #25).
+
+   There is **no fallback destination**. An unroutable turn ends with an explicit
+   message; it does not become a `researcher` query.
 
 5. The chosen node runs:
 
    - **`researcher`** — RAG. `latest_message → retriever → context → prompt → LLM → str`.
      Returns `Command(goto="__end__")` with one new `AIMessage`.
    - **`dice_roller`** — LLM-parses the request into structured fields, rolls with the
-     pure `DiceRoller` utility, returns `Command(goto="supervisor")` with one new
-     `AIMessage`.
+     pure `DiceRoller` utility, returns `Command(goto="__end__")` with one new
+     `AIMessage`. It used to return to the supervisor; see below.
    - **`dungeon_master`** — `process_task` is `pass`. Returns `None`. This node cannot
      currently execute successfully.
 
@@ -69,13 +85,14 @@ destinations from the return type annotation on `process_task`.
    continues until the user types `quit` or `exit` — no agent can end the session
    on their behalf.
 
-The `dice_roller → supervisor` return edge means dice requests take at least two
-supervisor turns. The 2025-03-31 log shows the practical consequence: after the roll,
-the supervisor sees the roll result as the newest message and routes to `researcher`,
-which then answers a question nobody asked. The routing prompt has no notion of
-"the request is already satisfied." The extra routing call is cheap (~0.65 s);
-the *answer* it triggers is not — ~40 s of unwanted generation at 5.3 tok/s. That
-makes it the single most expensive thing the graph does. PR-04 addresses both.
+**The `dice_roller → supervisor` return edge is gone (PR-04).** It used to mean a
+dice request took two supervisor turns, and the 2025-03-31 log shows what that
+cost: after the roll, the supervisor saw the roll *result* as the newest message
+and routed it to `researcher`, which spent ~40 s answering a question nobody
+asked. Two changes close it — `dice_roller` terminates directly, and the
+supervisor routes on `current_task` rather than the tail, so an agent's own
+output can never become the thing being routed. A dice request now measures
+**4.9 s** end to end instead of ~45 s.
 
 ## State
 
