@@ -50,7 +50,7 @@ destinations from the return type annotation on `process_task`.
    `"researcher"`, `"finish"` — first hit wins, in that order. Anything unmatched,
    an exception, or a `None` response defaults to `researcher`. It returns
    `Command(goto=<agent>, update={"active_agent": goto})`. Measured cost of this
-   call on the target machine: **~5.7 s** (see `docs/KNOWN_ISSUES.md` #24).
+   call on the target machine, warm: **~0.65 s** (see `docs/KNOWN_ISSUES.md` #24).
 
 5. The chosen node runs:
 
@@ -73,8 +73,9 @@ The `dice_roller → supervisor` return edge means dice requests take at least t
 supervisor turns. The 2025-03-31 log shows the practical consequence: after the roll,
 the supervisor sees the roll result as the newest message and routes to `researcher`,
 which then answers a question nobody asked. The routing prompt has no notion of
-"the request is already satisfied." At ~5.7 s per routing call, that wrong turn is
-also the single most expensive thing the graph does. PR-04 addresses both.
+"the request is already satisfied." The extra routing call is cheap (~0.65 s);
+the *answer* it triggers is not — ~40 s of unwanted generation at 5.3 tok/s. That
+makes it the single most expensive thing the graph does. PR-04 addresses both.
 
 ## State
 
@@ -126,10 +127,16 @@ called by any subclass), `_log_interaction(...)`, and `_get_latest_message(state
 which tolerates both dict-shaped and `BaseMessage`-shaped history and falls back to
 `current_task`. Abstract methods: `process_task`, `get_definition`.
 
-**`src/models/llm.py`** — the single provider boundary. `create_llm(model_name="Llama3.2",
-temperature=0)` returns a `ChatOllama`; `create_json_llm(...)` adds `format="json"`
-and is never called. Every agent instantiates its own client in `__init__`, so a
-four-agent graph opens four Ollama clients.
+**`src/models/llm.py`** — the single provider boundary. `create_llm(agent_type)`
+resolves a model per role from `AGENT_MODELS` (`llama3.2:3b` for `supervisor` and
+`dice_roller`, `qwen2.5:7b` for `researcher` and `dungeon_master`), overridable by
+`DND_MODEL_<AGENT_TYPE>` or `DND_MODEL_DEFAULT`, against the host in `OLLAMA_HOST`.
+It returns an `OllamaChat` — a `ChatOllama` subclass that translates the two
+failures this project hits constantly, a dead daemon and an unpulled model, into
+messages that name the host and the `ollama pull` command. Construction makes no
+network call, so the graph (and the test suite) build offline. Every agent
+instantiates its own client in `__init__`, so a four-agent graph opens four
+clients; the daemon keeps both models resident, so this costs nothing here.
 
 **`src/prompts/prompts.py`** — four constants: `DUNGEON_MASTER_PROMPT`,
 `RESEARCHER_PROMPT`, `SUPERVISOR_PROMPT`, `DICE_ROLLER_PROMPT`. The supervisor prompt

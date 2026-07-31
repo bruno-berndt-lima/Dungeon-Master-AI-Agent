@@ -23,7 +23,7 @@ class DiceRollerAgent(BaseAgent):
     def __init__(self):
         super().__init__("dice_roller")
         self.system_prompt = DICE_ROLLER_PROMPT
-        self.llm = create_llm()
+        self.llm = create_llm(self.agent_type)
 
     def get_definition(self) -> str:
         return self.system_prompt

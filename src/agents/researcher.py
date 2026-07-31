@@ -17,7 +17,7 @@ class ResearcherAgent(BaseAgent):
     
     def __init__(self):
         super().__init__("researcher")
-        self.llm = create_llm()
+        self.llm = create_llm(self.agent_type)
         self.system_prompt = RESEARCHER_PROMPT
         
         # Initialize vectorstore retriever

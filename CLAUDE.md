@@ -41,9 +41,11 @@ retrieval works out of the box — you do **not** need the source PDFs to run th
 They are only required to re-index, and they are gitignored (`Documents/README.md`).
 There is no ingestion script yet; see "Rebuilding the index" below.
 
-**Expect it to be slow.** Ollama has no GPU path on Intel Macs, so this is
-CPU-only: ~5.7 s per supervisor routing call and ~10 tok/s generation with a 3B
-model. See `docs/KNOWN_ISSUES.md` #24.
+**Expect generation to be slow.** Ollama has no GPU path on Intel Macs, so this
+is CPU-only: **11.4 tok/s** on `llama3.2:3b`, **5.3 tok/s** on `qwen2.5:7b` — a
+200-token answer takes 18 s and 38 s respectively. Routing is not the problem
+(~0.65 s warm); output tokens are. The first call to each model also pays a cold
+load of 5–11 s. See `docs/KNOWN_ISSUES.md` #24.
 
 ## Layout
 
@@ -57,7 +59,7 @@ model. See `docs/KNOWN_ISSUES.md` #24.
 | `src/actors/` | `Actor` ABC, `Player`, `NPC` — data models, not yet used by the graph |
 | `src/data/` | `loader` (PDF), `processing` (chunking), `vectorstore` (Chroma) |
 | `src/pipelines/` | `grader`, `rewriter`, `generator` — corrective-RAG parts, currently unused |
-| `src/models/llm.py` | `create_llm()` / `create_json_llm()` — the single LLM factory |
+| `src/models/llm.py` | `create_llm(agent_type)` — the single LLM factory; per-agent model map, env overrides |
 | `src/prompts/prompts.py` | All system prompts, as module-level string constants |
 | `src/utils/dice.py` | Pure dice notation parser + roller (no LLM) |
 | `src/utils/llm_logger.py` | Appends every agent call to `logs/llm_interactions/*.jsonl` |
@@ -66,8 +68,12 @@ model. See `docs/KNOWN_ISSUES.md` #24.
 
 ## Conventions to follow
 
-- **One LLM factory.** Every agent calls `create_llm()` from `src/models/llm.py`.
-  Change the model/provider there, not in individual agents.
+- **One LLM factory.** Every agent calls `create_llm(self.agent_type)` from
+  `src/models/llm.py` — after `super().__init__(...)`, so `agent_type` is set. The
+  model is chosen there, per role, from `AGENT_MODELS`; a new agent type not in
+  that map falls back to `DEFAULT_MODEL`. Change models, host, or provider in that
+  one file, never in an agent. Overrides without editing code:
+  `DND_MODEL_<AGENT_TYPE>`, `DND_MODEL_DEFAULT`, `OLLAMA_HOST`.
 - **Prompts live in `src/prompts/prompts.py`** as `UPPER_SNAKE` constants, imported
   by name. Don't inline system prompts in agent classes. (`DiceRollerAgent._parse_dice_request`
   currently violates this with an inline parse prompt.)

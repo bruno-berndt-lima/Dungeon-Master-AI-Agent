@@ -147,8 +147,9 @@ per-die detail. Returns a Markdown string with a 🎲 prefix and a bolded total.
 
 **Return** — `Command(goto="supervisor")` with one new `AIMessage`. That return
 edge is what produces the extra supervisor hop described in
-`docs/ARCHITECTURE.md`, and at ~5.7 s per routing call it is the most expensive
-thing in the graph. PR-04 lets this node terminate directly instead.
+`docs/ARCHITECTURE.md`. The hop itself is cheap (~0.65 s); what makes it the most
+expensive thing in the graph is the ~40 s researcher answer it goes on to
+trigger. PR-04 lets this node terminate directly instead.
 
 It previously did `dict(state)` — a shallow copy — and then appended to
 `updated_state["messages"]`, writing through to the graph's own list. Fixed in

@@ -13,7 +13,7 @@ class DungeonMaster(BaseAgent):
     
     def __init__(self):
         super().__init__("dungeon_master")
-        self.llm = create_llm()
+        self.llm = create_llm(self.agent_type)
         self.system_prompt = DUNGEON_MASTER_PROMPT
 
     def get_definition(self) -> str:
