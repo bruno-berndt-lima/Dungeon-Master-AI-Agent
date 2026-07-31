@@ -1,4 +1,5 @@
 from typing import TypedDict, Literal
+from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import MessagesState, END
 from langgraph.types import Command
 from src.prompts.prompts import SUPERVISOR_PROMPT
@@ -29,29 +30,16 @@ class GameSupervisor(BaseAgent):
         return self.system_prompt
 
     def process_task(self, state: GameState) -> Command[Literal[*AGENT_TYPES, "__end__"]]:
-        # If there's an explicit FINISH signal, end the process
-        if state.get("next") == "FINISH" or state.get("next_agent") == "FINISH":
-            return Command(goto=END, update=state)
-        
-        # Extract the current task
         current_task = state.get("current_task", "")
-        
-        # Prepare messages for LLM
-        messages = [
-            {"role": "system", "content": self.system_prompt},
-        ]
-        
-        # Add the latest message from the user
-        if "messages" in state and state["messages"]:
-            for message in state["messages"]:
-                if isinstance(message, dict):
-                    messages.append(message)
-                else:
-                    content = message.content if hasattr(message, "content") else str(message)
-                    messages.append({"role": "user", "content": content})
-        else:
-            messages.append({"role": "user", "content": current_task})
-        
+
+        # History is already BaseMessage (the add_messages reducer coerces it),
+        # so hand it to the model as-is rather than flattening every turn to
+        # role="user" — that discarded which agent said what.
+        history = list(state.get("messages") or [])
+        if not history and current_task:
+            history = [HumanMessage(content=current_task)]
+        messages = [SystemMessage(content=self.system_prompt), *history]
+
         try:
             # Send to LLM for routing decision
             response = self.llm.invoke(messages)
@@ -83,25 +71,22 @@ class GameSupervisor(BaseAgent):
             self._log_interaction(
                 query=str(messages),
                 response=f"Error: {str(e)}. Defaulting to researcher",
-                metadata={"error": str(e), "next_agent": goto}
+                metadata={"error": str(e), "routed_to": goto}
             )
         
         # Convert FINISH to END for langgraph
         if goto == "FINISH":
             goto = END
         
-        # Update state with next decision
-        updated_state = dict(state)
-        updated_state["next_agent"] = goto
-        
-        # Log the interaction
         self._log_interaction(
             query=str(messages),
             response=str(goto),
-            metadata={"next_agent": goto}
+            metadata={"routed_to": goto},
         )
-        
-        return Command(goto=goto, update=updated_state)
+
+        # Return only what changed. The supervisor produces no messages, and
+        # routing travels in `goto` — there is no next_agent field to mirror.
+        return Command(goto=goto, update={"active_agent": goto})
     
         
 
