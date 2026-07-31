@@ -6,7 +6,8 @@ Guidance for Claude Code when working in this repository.
 
 An AI Dungeon Master for D&D 5e: a LangGraph multi-agent system where a supervisor
 routes player input to specialist agents (narrator, rules researcher, dice roller).
-Rules retrieval is RAG over the three core 5e rulebooks, indexed in a local ChromaDB.
+Rules retrieval is RAG over the **SRD 5.1** (CC-BY-4.0), which ships in
+`corpus/srd/` and is indexed in a local ChromaDB.
 All inference currently runs locally through Ollama.
 
 The project **runs**: all four agents are implemented, routing is schema-constrained,
@@ -37,10 +38,10 @@ constraints pin it:
 comments there explain each. Both torch/numpy pins carry platform markers, so
 they are inert off Intel macOS.
 
-Requires a running Ollama daemon. The `chroma_db/` directory is committed, so
-retrieval works out of the box — you do **not** need the source PDFs to run the app.
-They are only required to re-index, and they are gitignored (`Documents/README.md`).
-See "Rebuilding the index" below.
+Requires a running Ollama daemon. The `chroma_db/` directory is committed, so retrieval works out of the box, and
+`corpus/srd/` means it can be rebuilt from the repo alone. The commercial
+rulebook PDFs are optional and gitignored — they only buy wider coverage; see
+`Documents/README.md` and "Rebuilding the index" below.
 
 **Expect generation to be slow.** Ollama has no GPU path on Intel Macs, so this
 is CPU-only: **11.4 tok/s** on `llama3.2:3b`, **5.3 tok/s** on `qwen2.5:7b` — a
@@ -58,7 +59,8 @@ load of 5–11 s. See `docs/KNOWN_ISSUES.md` #24.
 | `src/graph/game_state.py` | `GameState` TypedDict + default factory |
 | `src/agents/` | `base_agent` (ABC), `supervisor`, `dungeon_master`, `researcher`, `dice_roller` |
 | `src/actors/` | `Actor` ABC, `Player`, `NPC` — data models, not yet used by the graph |
-| `src/data/` | `loader` (PDF), `processing` (chunking), `vectorstore` (Chroma) |
+| `src/data/` | `srd_loader` (JSON, default), `loader` (PDF), `processing`, `vectorstore` |
+| `corpus/srd/` | The vendored SRD 5.1 corpus. **Committed** — see `corpus/README.md` |
 | `scripts/ingest.py` | Rebuilds `chroma_db/` from the PDFs; `--rebuild`, `--dry-run` |
 | `src/pipelines/` | `grader`, `rewriter`, `generator` — corrective-RAG parts, currently unused |
 | `src/models/llm.py` | `create_llm(agent_type)` — the single LLM factory; per-agent model map, env overrides |
@@ -100,24 +102,34 @@ load of 5–11 s. See `docs/KNOWN_ISSUES.md` #24.
 ## Rebuilding the index
 
 ```bash
-python scripts/ingest.py              # build; refuses to touch an existing index
-python scripts/ingest.py --rebuild    # replace it
-python scripts/ingest.py --dry-run    # load and chunk without embedding
+python scripts/ingest.py --rebuild        # SRD 5.1 -> chroma_db/  (default)
+python scripts/ingest.py --dry-run        # chunk without embedding
 ```
 
-Needs the three PDFs in `Documents/` — gitignored, so supply your own
-(`Documents/README.md`). The script names the missing files rather than failing
-on a traceback. You do **not** need them to run the app; `chroma_db/` is
-committed.
+Reproducible from a clean clone: the corpus is committed under `corpus/srd/`, so
+this needs no PDFs and no network. ~36 s, 3,082 chunks.
 
-Under the hood: `load_documents` (PyMuPDF, tags `book` + `page_number`) →
-`split_documents` (1000 chars, 200 overlap) → `build_vectorstore`.
+**Two corpora, two indexes.** The SRD is a subset of the published books, so if
+you own them:
 
-`load_vectorstore()` reads and `build_vectorstore(docs, rebuild=...)` writes —
-they used to be one function that silently ignored its `docs` argument whenever
-`chroma_db/` existed. Building over an existing store is refused, because Chroma
-appends and would duplicate every chunk. Embeddings are `all-MiniLM-L6-v2`
-(384-dim); changing the embedding model invalidates the whole index.
+```bash
+python scripts/ingest.py --source rulebooks --rebuild   # -> chroma_db_full/
+DND_CHROMA_DIR=chroma_db_full python main.py
+```
+
+`chroma_db_full/` is gitignored; `chroma_db/` stays SRD-only and committed.
+`corpus/README.md` has the coverage comparison.
+
+Under the hood, SRD path: `load_srd_documents` renders **one document per entry**
+(monster, spell, rule section) and chunks each one itself, re-heading every piece
+with the entry name — Chroma embeds `page_content` and never metadata, so a piece
+without its title cannot be found by name. PDF path: `load_documents` (PyMuPDF,
+tags `book` + `page_number`) → `split_documents`.
+
+`load_vectorstore()` reads and `build_vectorstore(docs, rebuild=...)` writes.
+Building over an existing store is refused, because Chroma appends and would
+duplicate every chunk. Embeddings are `all-MiniLM-L6-v2` (384-dim); changing the
+embedding model invalidates the whole index.
 
 ## Testing
 

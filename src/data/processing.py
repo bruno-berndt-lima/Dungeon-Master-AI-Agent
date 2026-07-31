@@ -22,3 +22,15 @@ def split_documents(
         chunk_size=chunk_size, chunk_overlap=chunk_overlap
     )
     return text_splitter.split_documents(docs)
+
+
+def split_text(
+    text: str,
+    chunk_size: int = CHUNK_SIZE,
+    chunk_overlap: int = CHUNK_OVERLAP,
+) -> List[str]:
+    """Split raw text. Used by the SRD loader, which re-heads each piece itself."""
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=chunk_size, chunk_overlap=chunk_overlap
+    )
+    return text_splitter.split_text(text)

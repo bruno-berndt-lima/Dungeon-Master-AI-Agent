@@ -29,15 +29,15 @@ as items close.
 | 17 | `tests/` are not tests | **fixed** (PR-01) |
 | 18 | pytest config in the wrong table | **fixed** (PR-01) |
 | 19 | `requirements.txt` unpinned | **fixed** (PR-01) |
-| 20 | Large binaries committed | partial — PDFs untracked (PR-00b); history and index text remain |
+| 20 | Large binaries committed | **resolved for the working tree** (PR-09) — index rebuilt from CC-BY SRD; git history still holds the PDFs |
 | 21 | `env_activation.txt` is Windows-only | open |
 | 22 | `create_llm` model name does not resolve | **fixed** (PR-02) |
-| 23 | Chroma dirties the repo on read | open — unassigned |
+| 23 | Chroma dirties the repo on read | open — unassigned (now cheap to fix: the index is reproducible from `corpus/srd/`) |
 | 24 | Generation throughput dominates | **mitigated** — #6 removed (PR-04), narration streams (PR-06) |
 | 25 | A 3B model is not accurate enough to route | **fixed** (PR-04) |
 | 26 | Time-to-first-token is dominated by prompt evaluation | **mitigated** — DM (PR-06) and researcher (PR-08) both tuned |
 | 27 | A local model invents dice modifiers | **fixed** (PR-05) |
-| 28 | Cited page numbers are PDF pages, not printed pages | open |
+| 28 | Cited page numbers are PDF pages, not printed pages | **moot on the default corpus** (PR-09) — SRD chunks cite by entry name; still applies to `chroma_db_full/` |
 
 Seven items were found after the initial audit and are described at the bottom
 of this file: #22 through #28.
@@ -246,6 +246,17 @@ reproduce the environment this code was written against.
 the PDFs are commercial Wizards of the Coast rulebooks in a public repository — see
 the licensing note in `docs/RAG_PIPELINE.md`.
 
+**Working tree resolved in PR-09.** The PDFs were untracked in PR-00b, and the
+committed index is now built from the CC-BY SRD 5.1 corpus in `corpus/srd/` —
+verified, 3,082 chunks, all `source = "SRD 5.1"`, no rulebook text and no OCR
+artifacts. The index stays committed, so a clone still retrieves out of the box,
+and it is now reproducible from the repository alone.
+
+**Still open: git history.** The PDFs were added in the initial commit
+(`d617836`) and the old rulebook-derived index in every commit up to PR-09. Both
+remain fetchable by SHA until a `git filter-repo` rewrite plus force-push. That
+is a separate, destructive operation — decide it on its own.
+
 ### 21. `env_activation.txt` is Windows-only
 
 Contains `.\venv\Scripts\activate`. Fine as a personal note; misleading on this macOS
@@ -402,3 +413,8 @@ entire point of a citation is that it can be checked. Two ways to fix it:
 Either requires re-indexing, so it belongs with the next corpus change. Until
 then the labels are internally consistent — they do identify the retrieved
 passage — just offset from the printed number.
+
+**Moot on the default corpus since PR-09.** SRD chunks cite by entry name —
+`SRD 5.1, Monsters: Goblin` — which is what a page number was a proxy for, and
+is directly checkable. The issue still applies to `chroma_db_full/`, built from
+the PDFs.
