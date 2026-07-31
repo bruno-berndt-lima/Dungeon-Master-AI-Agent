@@ -6,7 +6,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
 from langgraph.graph import END
 from langgraph.types import Command
-from src.data.vectorstore import get_vectorstore
+from src.data.vectorstore import VectorStoreMissingError, load_vectorstore
 from src.prompts.prompts import RESEARCHER_PROMPT
 from src.models.llm import create_llm
 from src.agents.base_agent import BaseAgent
@@ -22,7 +22,12 @@ class ResearcherAgent(BaseAgent):
         
         # Initialize vectorstore retriever
         try:
-            self.vectorstore = get_vectorstore([])  # Empty list to load existing store
+            # Read-only. This used to be `get_vectorstore([])` — passing an
+            # empty document list to a build-or-load function and relying on it
+            # to ignore the argument (KNOWN_ISSUES #11). If no index exists this
+            # now raises instead of handing back an empty store that retrieves
+            # nothing while looking healthy.
+            self.vectorstore = load_vectorstore()
             self.retriever = self.vectorstore.as_retriever()
             
             # Create RAG chain
@@ -37,6 +42,10 @@ class ResearcherAgent(BaseAgent):
                 | self.llm
                 | StrOutputParser()
             )
+        except VectorStoreMissingError as exc:
+            print(f"Warning: {exc} Answering without retrieval.")
+            self.retriever = None
+            self.rag_chain = None
         except Exception as e:
             print(f"Warning: Could not initialize vectorstore: {e}")
             self.retriever = None
