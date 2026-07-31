@@ -236,15 +236,18 @@ index. Also out of scope: the routing-latency work, which belongs to PR-04.
    `logs/llm_interactions/llm_log_2025-03-31.jsonl`. Either give the router an
    explicit "request already satisfied → FINISH" branch, or route on `current_task`
    rather than the full tail.
-4. **Cut routing latency.** Measured on the target machine: a single
-   `llama3.2:3b` routing call costs **5.69 s**, and a dice request pays it
-   *twice* because `dice_roller` returns to the supervisor — about 15 s for
-   "roll a d20". Two changes:
-   - Add a deterministic pre-filter ahead of the LLM. A dice-notation regex
-     (`\d*d\d+`) resolves most dice requests in microseconds; fall through to
-     the model only when it does not match.
+4. **Stop paying for an unwanted generation.** Re-measured in PR-02: a warm
+   routing call costs **0.65 s**, not the 5.69 s an earlier draft of this spec
+   claimed (that number was a cold model load). The expensive consequence of
+   task 3 is not the extra routing hop — it is the **~40 s researcher answer**
+   the hop triggers at 5.3 tok/s. Two changes:
    - Let `dice_roller` terminate directly instead of returning to the
-     supervisor, removing the second routing call.
+     supervisor. This is the whole win; it removes a full generation.
+   - Add a deterministic pre-filter ahead of the LLM. A dice-notation regex
+     (`\d*d\d+`) classifies dice requests *exactly*, where a 3B model classifies
+     them *usually*. Justify this as correctness (#5), not latency — warm
+     routing already measured 6/6 correct at 0.65 s, so the speed gain is real
+     but small.
 5. Delete the unused `class State(MessagesState)`.
 
 **Acceptance**
