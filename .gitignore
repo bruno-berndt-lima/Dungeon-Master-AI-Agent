@@ -101,6 +101,9 @@ venv.bak/
 
 # Project specific
 *.db
+# SQLite side files for the checkpointer database
+*.db-shm
+*.db-wal
 *.sqlite
 
 # Source rulebooks — commercial WotC material, not distributed with this repo.

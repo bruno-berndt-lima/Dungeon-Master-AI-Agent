@@ -90,31 +90,42 @@ to be invisible now raise:
 The duplicate `Chroma` import (`langchain_community.vectorstores` then
 `langchain_chroma`, second shadowing the first) is gone.
 
-## The unused corrective-RAG layer
+## Corrective RAG
 
-`src/pipelines/` contains three factories that together form a standard CRAG loop.
-None are imported anywhere.
+`src/pipelines/` held three chains written in early 2025 and wired into nothing.
+PR-08 kept one:
 
-**`grader.py`** — `create_retrieval_grader(llm)` returns
-`grade_prompt | llm.with_structured_output(GradeDocuments)`, where `GradeDocuments` is
-a `pydantic.v1.BaseModel` with a single `binary_score: str` field ('yes'/'no').
-Note two dependencies: `pydantic.v1` (legacy shim), and `with_structured_output`,
-which `ChatOllama` supports unevenly depending on the model.
+- **`rewriter.py` — wired.** Called only when the first retrieval scores below
+  `RELEVANCE_THRESHOLD`, which is where a model call is worth its ~4 s. Measured:
+  "how do i make my dude tougher" scored 0.041, and 0.439 after rewriting to
+  "How can you increase your character's Armor Class, Hit Points, and
+  Constitution?". Its prompt had to be tightened to return a bare question — the
+  original asked the model to "formulate an improved question" and got
+  commentary with it, which was then embedded along with the question.
+- **`grader.py` — deleted.** Wiring it as specced cost **31.7 s per query** and
+  answered "yes" every time. It re-evaluates the same ~1,000-token context the
+  answer call is about to evaluate again, which on CPU is the single most
+  expensive thing available. The retriever's own similarity score decides the
+  same question for free.
+- **`generator.py` — deleted.** No importers, `hub.pull("rlm/rag-prompt")`
+  needed network access at construction, and `from langchain import hub` no
+  longer imports on LangChain 1.x.
 
-**`rewriter.py`** — `create_question_rewriter(llm)`, a D&D-aware query rewriter that
-takes the original question and produces a version better aligned to 5e terminology
-and mechanics. This is the piece most likely to pay off immediately: player phrasing
-("can I sneak past the guard?") and rulebook phrasing ("Stealth check, Passive
-Perception") are very far apart in embedding space.
+The relevance gate, measured over this index:
 
-**`generator.py`** — `create_rag_chain(llm)` pulls `rlm/rag-prompt` from LangChain Hub
-and pipes it through the LLM. It requires network access at construction time and
-duplicates what `ResearcherAgent` already builds inline. It also defines a local
-`format_docs` that it never wires into the chain.
+| | score range |
+|---|---|
+| On-topic rules questions | 0.363 – 0.529 |
+| Off-topic questions | -0.154 – 0.053 |
 
-Wiring these in would give: retrieve → grade each doc → if none relevant, rewrite the
-query and retry → generate. That is the design the file layout implies but the code
-never assembled.
+`RELEVANCE_THRESHOLD = 0.25` sits in the gap. It is a property of *this* index
+and embedding model — re-measure after any corpus change.
+
+Per-*chunk* scores do not discriminate as cleanly: for "sneak attack" the four
+retrieved chunks scored 0.428, 0.369, 0.349 and 0.301, and the 0.301 one was an
+unrelated Monster Manual page. Pruning on that signal would risk dropping useful
+context, so all `k` chunks are kept and the citation list says "passages
+consulted" rather than claiming each one was used.
 
 ## Where to improve, in order of payoff
 

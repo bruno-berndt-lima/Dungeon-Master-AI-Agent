@@ -26,7 +26,7 @@
         ▼             ▼               ▼
        END           END             END
 
-  researcher ──▶ Chroma retriever ──▶ prompt ──▶ ChatOllama ──▶ str
+  researcher ──▶ scored retrieval ──▶ [rewrite+retry on a miss] ──▶ ChatOllama
   supervisor ──▶ prefilter_route() ──▶ or ──▶ with_structured_output(Router)
   dungeon_master ──▶ narrate (streams) ──▶ extract scene ──▶ game_state
 ```
@@ -71,8 +71,9 @@ destinations from the return type annotation on `process_task`.
 
 5. The chosen node runs:
 
-   - **`researcher`** — RAG. `latest_message → retriever → context → prompt → LLM → str`.
-     Returns `Command(goto="__end__")` with one new `AIMessage`.
+   - **`researcher`** — RAG. `question → scored retrieval → (rewrite + retry if
+     the score misses) → labelled passages → prompt → LLM → answer + sources`.
+     Streams, and returns `Command(goto="__end__")` with one new `AIMessage`.
    - **`dice_roller`** — reads the dice expression out of the request with a
      regex, rolls with the pure `DiceRoller` utility, returns
      `Command(goto="__end__")` with one new `AIMessage`. No LLM call unless the
@@ -109,8 +110,13 @@ building it:
   spliced onto the end of the story.
 
 Measured on the target machine: first token ~3.6 s, against ~40 s to wait for a
-finished narration. The researcher does not stream yet — its RAG chain belongs to
-PR-08.
+finished narration. The researcher streams too since PR-08.
+
+One wrinkle the researcher introduced: a node can add to its answer *after* the
+model stops — `append_sources` lists the passages the answer came from. The
+streamed text and the stored message therefore differ, so `main.py` prints the
+unstreamed tail rather than skipping the message entirely. Without that the
+citations never reached the player.
 
 **The `dice_roller → supervisor` return edge is gone (PR-04).** It used to mean a
 dice request took two supervisor turns, and the 2025-03-31 log shows what that

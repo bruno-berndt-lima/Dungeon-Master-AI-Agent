@@ -22,9 +22,9 @@ as items close.
 | 10 | `Chroma` imported twice | **fixed** (PR-07) |
 | 11 | `get_vectorstore` ignores its argument | **fixed** (PR-07) |
 | 12 | No ingestion entry point | **fixed** (PR-07) |
-| 13 | `src/pipelines/` unused | open — PR-08 |
+| 13 | `src/pipelines/` unused | **fixed** (PR-08) — rewriter wired, generator and grader deleted |
 | 14 | `src/actors/` unused | open — deferred |
-| 15 | Unused declarations | partial — `create_json_llm` (PR-02), `Router`/`State` (PR-04), `DiceRollRequest` (PR-05); `format_docs` → PR-08 |
+| 15 | Unused declarations | **fixed** — `create_json_llm` (PR-02), `Router`/`State` (PR-04), `DiceRollRequest` (PR-05), `format_docs` (PR-08) |
 | 16 | State keys never written | partial — `last_response` (PR-03) and `game_state` (PR-06) written; three remain |
 | 17 | `tests/` are not tests | **fixed** (PR-01) |
 | 18 | pytest config in the wrong table | **fixed** (PR-01) |
@@ -35,11 +35,12 @@ as items close.
 | 23 | Chroma dirties the repo on read | open — unassigned |
 | 24 | Generation throughput dominates | **mitigated** — #6 removed (PR-04), narration streams (PR-06) |
 | 25 | A 3B model is not accurate enough to route | **fixed** (PR-04) |
-| 26 | Time-to-first-token is dominated by prompt evaluation | partial — DM tuned (PR-06); researcher → PR-08 |
+| 26 | Time-to-first-token is dominated by prompt evaluation | **mitigated** — DM (PR-06) and researcher (PR-08) both tuned |
 | 27 | A local model invents dice modifiers | **fixed** (PR-05) |
+| 28 | Cited page numbers are PDF pages, not printed pages | open |
 
-Six items were found after the initial audit and are described at the bottom
-of this file: #22 through #27.
+Seven items were found after the initial audit and are described at the bottom
+of this file: #22 through #28.
 
 ## Blocking
 
@@ -179,6 +180,19 @@ test run.
 This is a complete corrective-RAG loop that was never wired in. `generator.py`
 additionally requires network access at construction (`hub.pull("rlm/rag-prompt")`) and
 defines a `format_docs` it never uses.
+
+**Resolved in PR-08, by keeping one of the three.**
+
+- `rewriter.py` — **wired**. It runs only when retrieval scores below the
+  relevance threshold, which is where it earns its model call: "how do i make my
+  dude tougher" scored 0.041, and 0.439 after rewriting.
+- `grader.py` — **deleted**. Wiring it as specced cost **31.7 s per query** and
+  returned "yes" every time, because it re-evaluates the same ~1,000-token
+  context the answer call is about to evaluate again. The retriever's own
+  similarity score answers the same question for free. See #26.
+- `generator.py` — **deleted**. Dead in every sense: no importers, network
+  access required at construction, and `from langchain import hub` no longer
+  imports on LangChain 1.x.
 
 ### 14. `src/actors/` is unused
 
@@ -368,3 +382,23 @@ the model made up. That last guard was added after `1d20+2` came back for
 string, sliding past a check that only looked at the modifier field.
 
 The common path now costs **no LLM call at all** — 0.0 s, down from 4.6 s.
+
+### 28. Cited page numbers are PDF pages, not printed pages
+
+`src/data/loader.py` copies PyMuPDF's `page` into `page_number`, which is the
+0-based index of the page *in the file*. A rulebook PDF includes a cover and
+front matter, so this runs several pages behind the number printed on the page —
+the Sneak Attack passage is cited as `Player's Handbook, p.89`, and the printed
+page in the book is in the mid-90s.
+
+This matters more now that PR-08 surfaces citations to the player, since the
+entire point of a citation is that it can be checked. Two ways to fix it:
+
+- Add a per-book offset to `DOCUMENT_PATHS` and apply it during ingestion. Cheap,
+  but hand-measured per book and wrong if the PDF edition differs.
+- Read the printed folio off the page text during ingestion. More robust, and
+  these scans are OCR of varying quality.
+
+Either requires re-indexing, so it belongs with the next corpus change. Until
+then the labels are internally consistent — they do identify the retrieved
+passage — just offset from the printed number.
