@@ -54,8 +54,9 @@ specs:
    dice requests exactly, where a 3B model classifies them *usually*. Worth doing
    for #5 — but it saves 0.65 s, so do not sell it as a latency fix.
 3. **Streaming is not cosmetic here.** At 5.3 tok/s a 200-token narration takes
-   38 s; un-streamed, that is indistinguishable from a hang. The DM agent must
-   stream. This is the single largest perceived-latency win available.
+   38 s; un-streamed, that is indistinguishable from a hang. Done in PR-06 — and
+   it moved the question from *throughput* to **time-to-first-token**, which is
+   prompt-eval bound, not generation bound. See #26.
 
 Both models stay resident simultaneously (2.6 GB + 5.1 GB against 32 GB, verified
 via `/api/ps`), so the per-agent model map costs no swap penalty here. On a
@@ -125,7 +126,7 @@ ever have run against the default it shipped with.
 
 ## What is already done
 
-PR-01 through PR-04 have landed. Of the original plan:
+PR-01 through PR-04 and PR-06 have landed. Of the original plan:
 
 - **Toolchain pinned** — Python 3.12 (forced by torch's last Intel-macOS wheel),
   plus `transformers` and `numpy` constraints. See the PR-01 comment thread for
@@ -139,19 +140,20 @@ PR-01 through PR-04 have landed. Of the original plan:
 - **Routing** — structured output over the `Router` schema, a deterministic dice
   pre-filter, no silent `researcher` fallback, and `dice_roller` terminating
   directly. A dice request now costs 4.9 s instead of ~45 s.
+- **Dungeon Master** — implemented and streaming, with world state extracted from
+  each narration into `game_state`. First token ~3.6 s. The last stubbed agent.
 
 ## What remains
 
 In dependency order — see `SPECS.md` for the executable version.
 
-1. **PR-06** — implement `DungeonMaster.process_task`, which is still `pass`.
-   The project's core agent and its largest gap. It must stream: at 5.3 tok/s an
-   un-streamed narration is indistinguishable from a hang. Until it lands, every
-   narrative turn routes correctly and then returns nothing.
-2. **PR-05** — strict-schema dice parsing; delete the defensive stack.
-3. **PR-07** — `scripts/ingest.py`, so the index is reproducible.
-4. **PR-08** — researcher citations and corrective RAG. Also worth capping answer
-   length there: an unbounded rules answer measured **147 s**.
+1. **PR-05** — strict-schema dice parsing; delete the defensive stack.
+2. **PR-07** — `scripts/ingest.py`, so the index is reproducible.
+3. **PR-08** — researcher citations and corrective RAG. Two things PR-06 turned
+   up belong here: the researcher does not stream (its first token measured
+   **61.8 s** on a cold embedding model), and its answers are unbounded — one
+   rules question measured **147 s**. `dungeon_master` solves both with
+   `num_predict` and a streamed `invoke`; the same treatment applies.
 
 ## Still-relevant LangGraph work
 
