@@ -3,6 +3,41 @@
 Findings from a full read of every source file. Each is traceable to a specific line;
 none are speculative. Ordered by impact.
 
+## Status ledger
+
+Numbering is stable — `SPECS.md` references these IDs, so nothing is renumbered
+as items close.
+
+| # | Issue | Status |
+|---|---|---|
+| 1 | `DungeonMaster.process_task` is a stub | open — PR-06 |
+| 2 | Needs Python 3.11+ | **fixed** (PR-01) |
+| 3 | Return annotations disagree with returns | **fixed** (PR-03) |
+| 4 | `game_state` dict/string collision | **fixed** (PR-03) |
+| 5 | Supervisor routes by substring match | open — PR-04 |
+| 6 | No terminal condition after a dice roll | open — PR-04 |
+| 7 | `GameState` declares no reducers | **fixed** (PR-03) |
+| 8 | `dice_roller` mutates shared caller state | **fixed** (PR-03) |
+| 9 | `parse_dice_string` only splits on `+` | open — PR-05 (pinned by a strict `xfail`) |
+| 10 | `Chroma` imported twice | open — PR-07 |
+| 11 | `get_vectorstore` ignores its argument | open — PR-07 |
+| 12 | No ingestion entry point | open — PR-07 |
+| 13 | `src/pipelines/` unused | open — PR-08 |
+| 14 | `src/actors/` unused | open — deferred |
+| 15 | Unused declarations | partial — `create_json_llm` → PR-02, `Router` → PR-04, `DiceRollRequest` → PR-05, `format_docs` → PR-08 |
+| 16 | State keys never written | partial — `next_agent` removed (PR-03); five remain |
+| 17 | `tests/` are not tests | **fixed** (PR-01) |
+| 18 | pytest config in the wrong table | **fixed** (PR-01) |
+| 19 | `requirements.txt` unpinned | **fixed** (PR-01) |
+| 20 | Large binaries committed | partial — PDFs untracked (PR-00b); history and index text remain |
+| 21 | `env_activation.txt` is Windows-only | open |
+| 22 | `create_llm` model name does not resolve | open — PR-02 |
+| 23 | Chroma dirties the repo on read | open — unassigned |
+| 24 | Routing costs ~5.7 s per turn | open — PR-04 |
+
+Three items were found after the initial audit and are described at the bottom
+of this file: #22, #23, #24.
+
 ## Blocking
 
 ### 1. `DungeonMaster.process_task` is a stub
@@ -161,6 +196,32 @@ the licensing note in `docs/RAG_PIPELINE.md`.
 
 Contains `.\venv\Scripts\activate`. Fine as a personal note; misleading on this macOS
 checkout, where the command is `source venv/bin/activate`.
+
+## Found after the initial audit
+
+### 22. `create_llm` hardcodes a model name that does not resolve
+
+`src/models/llm.py` defaults to `model_name="Llama3.2"`. Verified against a live
+daemon: `ResponseError: model 'Llama3.2' not found (status code: 404)`. Ollama
+tags are lowercase and carry a size suffix (`llama3.2:3b`). Nothing in this repo
+could ever have run against that default. → PR-02.
+
+### 23. Chroma dirties the working tree on read
+
+Opening the store modifies `chroma_db/chroma.sqlite3` — no writes required, the
+open alone is enough. Since the store is committed, every app run and every test
+collection leaves the repo dirty, and the mutation has had to be reverted out of
+two PRs by hand. Either gitignore the store and make it a build artifact of
+`scripts/ingest.py`, or move it out of the repo entirely. Unassigned.
+
+### 24. Routing costs ~5.7 s of wall clock per turn
+
+Measured on the target machine (Intel i9-9980HK, CPU-only — Ollama has no GPU
+path on Intel Macs) with `llama3.2:3b`: a single supervisor routing call takes
+**5.69 s**, and generation runs at **10.4 tok/s**. Because `dice_roller` returns
+to the supervisor, a dice request pays the routing cost twice — roughly 15 s for
+"roll a d20", most of it spent deciding where to send a string that a regex could
+classify instantly. → PR-04.
 
 ## Suggested order of attack
 

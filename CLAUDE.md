@@ -16,20 +16,34 @@ scaffolding that is never called, and the graph does not fully wire up. See
 ## Running it
 
 ```bash
-python -m venv venv && source venv/bin/activate   # Windows: .\venv\Scripts\activate
+python3.12 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
-ollama pull llama3.2        # src/models/llm.py hardcodes model name "Llama3.2"
+ollama serve &              # or launch Ollama.app
+ollama pull llama3.2:3b     # note the tag: "Llama3.2" does NOT resolve
 python main.py              # interactive REPL; type "quit" or "exit" to leave
 ```
+
+**Use Python 3.12 specifically**, not 3.11 and not 3.13+. Two independent
+constraints pin it:
+
+- `src/agents/supervisor.py` uses `Literal[*ROUTING_OPTIONS]` (PEP 646), a syntax
+  error before **3.11**.
+- On Intel macOS the last torch release with an x86_64 wheel is **2.2.2**, whose
+  newest interpreter tag is **cp312**. Above 3.12 there is no installable torch,
+  and `sentence-transformers` needs it — so retrieval will not build.
+
+`requirements.txt` also pins `transformers` and `numpy` for the same reason; the
+comments there explain each. Both torch/numpy pins carry platform markers, so
+they are inert off Intel macOS.
 
 Requires a running Ollama daemon. The `chroma_db/` directory is committed, so
 retrieval works out of the box — you do **not** need the source PDFs to run the app.
 They are only required to re-index, and they are gitignored (`Documents/README.md`).
 There is no ingestion script yet; see "Rebuilding the index" below.
 
-**Python version matters.** `src/agents/supervisor.py` uses `Literal[*ROUTING_OPTIONS]`,
-which is PEP 646 syntax requiring **Python 3.11+**. The system Python here is 3.9.6,
-so the module will fail to import on it. Use 3.11 or newer in the venv.
+**Expect it to be slow.** Ollama has no GPU path on Intel Macs, so this is
+CPU-only: ~5.7 s per supervisor routing call and ~10 tok/s generation with a 3B
+model. See `docs/KNOWN_ISSUES.md` #24.
 
 ## Layout
 
@@ -63,15 +77,17 @@ so the module will fail to import on it. Use 3.11 or newer in the venv.
 - **Every LLM call gets logged** via `self._log_interaction(query, response, metadata)`.
   Keep this when adding agents; the JSONL logs are the only observability here.
 - **Routing is Command-based, not edge-based.** Nodes return
-  `Command(goto=..., update=state)`. The return type annotation
+  `Command(goto=..., update={...})`. The return type annotation
   (`Command[Literal["supervisor"]]`) is what LangGraph reads to infer valid
-  destinations — it must match what the method actually returns.
-- **State updates are copy-then-mutate**: `updated_state = dict(state)`, modify,
-  return in the `Command`. `GameState` declares no reducers, so returned values
-  replace rather than merge.
-- **Messages are plain dicts** (`{"role", "content", "name"}`), not LangChain
-  `BaseMessage` objects, despite the `GameState` type hint saying otherwise.
-  `BaseAgent._get_latest_message` handles both shapes; use it rather than indexing directly.
+  destinations — it must match what the method actually returns. There is no
+  `next_agent` state field; `goto` is the only routing channel.
+- **Return deltas, not whole state.** A node returns only the keys it changed.
+  For `messages` that means only the messages it produced — the `add_messages`
+  reducer appends them. Never `dict(state)` and mutate: that is a shallow copy,
+  so you write through to the graph's own lists.
+- **Messages are `BaseMessage`** (`HumanMessage` / `AIMessage`, with `name` set
+  to the agent type). The reducer coerces anything else, so agents always read
+  message objects. Use `BaseAgent._get_latest_message` rather than indexing.
 
 ## Rebuilding the index
 
@@ -95,19 +111,28 @@ invalidates the whole index.
 
 ## Testing
 
-`tests/` contains two scripts, not pytest tests: no assertions, print-based output,
-and they require a live Ollama plus the Chroma index. Run them directly
-(`python tests/test_dice_roller.py`). Note `pyproject.toml` uses `[tool.pytest]`,
-which pytest ignores — the correct table is `[tool.pytest.ini_options]`.
+```bash
+pytest                      # 29 passed, 1 xfailed
+pytest -m "not integration" # unit tests only — no dependency stack needed
+```
 
-The one genuinely unit-testable module is `src/utils/dice.py` (pure, deterministic
-apart from `random`). New tests should start there.
+Three files:
+
+- `tests/test_dice.py` — `src/utils/dice.py`, pure and offline. Includes a strict
+  `xfail` pinning the `-` modifier bug (KNOWN_ISSUES #9); PR-05 flips it.
+- `tests/test_state_contract.py` — the `add_messages` reducer and the SQLite
+  checkpointer, exercised with a stand-in node so **no model daemon is needed**.
+- `tests/test_graph_smoke.py` — the graph compiles and every agent node registers.
+
+The last two are marked `integration`: they need the dependency stack and Python
+3.12, but not a running model. Nothing in the suite calls a model — keep it that
+way, so the gate stays fast and runnable offline.
 
 ## Further reading
 
-- `SPECS.md` — **the execution contract for the Claude refactor: one spec per PR**
+- `SPECS.md` — **the execution contract for the refactor: one spec per PR**
 - `docs/ARCHITECTURE.md` — how a turn flows through the system, module by module
 - `docs/AGENTS.md` — per-agent contracts, prompts, and routing behavior
 - `docs/RAG_PIPELINE.md` — retrieval, chunking, the index, and the unused CRAG parts
 - `docs/KNOWN_ISSUES.md` — verified bugs and dead code, ranked
-- `docs/REFACTOR_NOTES.md` — porting to Claude (Fable 5 / Opus 5) and modern LangGraph
+- `docs/REFACTOR_NOTES.md` — direction, measured local-model performance, and what's left
