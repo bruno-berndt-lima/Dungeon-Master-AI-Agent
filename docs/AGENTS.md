@@ -8,7 +8,7 @@ the JSONL logs.
 |---|---|---|---|---|
 | `supervisor` | `GameSupervisor` | `src/agents/supervisor.py` | `Command(goto=<agent>\|END)` | Works |
 | `researcher` | `ResearcherAgent` | `src/agents/researcher.py` | `Command(goto="__end__")` | Works |
-| `dice_roller` | `DiceRollerAgent` | `src/agents/dice_roller.py` | `Command(goto="supervisor")` | Works |
+| `dice_roller` | `DiceRollerAgent` | `src/agents/dice_roller.py` | `Command(goto="__end__")` | Works |
 | `dungeon_master` | `DungeonMaster` | `src/agents/dungeon_master.py` | `None` | **Unimplemented** |
 
 ## The `BaseAgent` contract
@@ -40,25 +40,30 @@ dict branch is gone — the `add_messages` reducer coerces everything to
 
 ## `GameSupervisor`
 
-**Prompt** — `SUPERVISOR_PROMPT`: a four-line routing table (`dungeon_master` for
-narrative, `researcher` for rules/lore, `dice_roller` for dice, `FINISH` when done)
-ending with *"Return only the agent name."*
+**Prompt** — `SUPERVISOR_PROMPT`: a routing table with worked examples per
+destination (`dice_roller`, `researcher`, `dungeon_master`, `FINISH`), closing on
+*"Decide on intent, not on keywords."* It no longer says "return only the agent
+name" — the schema enforces the shape, so the prompt only has to carry meaning.
 
-**Mechanism** — prepends `SUPERVISOR_PROMPT` as a `SystemMessage` to the existing
-`BaseMessage` history (roles preserved, rather than flattening every turn to
-`role="user"` as it used to), calls the LLM, then parses the response by
-substring in fixed order:
+**Mechanism** — two stages, since PR-04.
 
-```python
-if   "dice_roller"    in text: goto = "dice_roller"
-elif "dungeon_master" in text: goto = "dungeon_master"
-elif "researcher"     in text: goto = "researcher"
-elif "finish"         in text: goto = "FINISH"
-else:                          goto = "researcher"
-```
+1. **`prefilter_route(request)`** — pure, no model. Returns `dice_roller` for
+   bare notation (`"2d6+1d8"`) or notation with a roll verb (`"roll 2d10 for
+   damage"`); returns `None` for anything else, including notation inside a
+   question (`"what does d20 mean"`) or used descriptively (`"my sword does 2d6
+   slashing"`). Conservative by design — a wrong fast answer is worse than a slow
+   right one.
+2. **Structured output** — `SUPERVISOR_PROMPT` plus the current request go to
+   `with_structured_output(Router, method="json_schema")`. `Router["next"]` is a
+   `Literal`, so constrained decoding makes an invalid destination impossible.
 
-Any exception during the call is caught and also routes to `researcher`, with the
-error recorded in the log metadata. `"FINISH"` is then mapped to LangGraph's `END`.
+There is **no fallback destination.** A schema violation, an unknown value, or an
+exception ends the turn with an explicit message and `router` recorded in the log
+metadata. The old behavior — every failure silently becoming a `researcher`
+query — produced confident RAG answers to questions nobody asked.
+
+`"FINISH"` maps to `END` and emits a fixed closing line. Ending a turn with no
+message at all is indistinguishable from a hang.
 
 **Declared destinations** — `Command[Literal[*AGENT_TYPES, "__end__"]]` where
 `AGENT_TYPES = ["dungeon_master", "researcher", "dice_roller"]`. The `Literal[*...]`
@@ -66,17 +71,19 @@ unpacking is why this module needs Python 3.11+.
 
 **Things to know before changing it:**
 
-- Substring matching means an LLM reply like *"not the dice_roller — use researcher"*
-  routes to `dice_roller`. A local Llama 3.2 frequently produces prose around the
-  answer.
-- `researcher` is the fallback for *every* failure mode, which is why unroutable input
-  ends up in RAG.
-- The whole message history goes into every routing call, including prior assistant
-  outputs. After a dice roll the newest message is the roll result, and the supervisor
-  routes on *that* rather than on the original request.
-- `class State(MessagesState)` and `class Router(TypedDict)` are declared at module
-  scope and unused — `Router` looks like an abandoned attempt at structured output
-  routing, which is the right fix (see `docs/REFACTOR_NOTES.md`).
+- **It routes on `current_task`, not on message history.** That is what closes
+  KNOWN_ISSUES #6: the tail of the conversation is whatever an agent last said,
+  so routing on it meant routing on the answer instead of the question. The cost
+  is that follow-ups carrying no standalone intent ("do that again") have no
+  context to disambiguate. It also keeps the routing prompt constant-size, so
+  latency does not grow across a campaign — pinned by a test.
+- **Model choice is about accuracy, not speed.** `llama3.2:3b` scored 7/12 on a
+  routing set where `qwen2.5:7b` scored 12/12, for ~1 s more per turn. See
+  KNOWN_ISSUES #25 before moving it back.
+- **A misroute to `dungeon_master` is currently silent** — that node is still a
+  stub returning `None`, so the turn produces no output at all. Until PR-06,
+  silence in the REPL means "routed to the DM", not "crashed".
+- `class State(MessagesState)` is deleted; `Router` is now the routing schema.
 
 ## `ResearcherAgent`
 
@@ -138,18 +145,21 @@ against the model:
 - on any exception, returns `("1d20", 0, False, False, "dice roll")`
 
 That defensive stack is a direct artifact of prompting a small local model for JSON.
-Most of it disappears with a provider that supports structured outputs or tool calling.
+PR-05 replaces it with `with_structured_output` over a strict schema — the same
+mechanism PR-04 used for routing, which is available locally on
+`langchain-ollama` 1.1.0.
 
 **Roll step** (`_execute_dice_roll`) — for advantage/disadvantage, extracts the base
 `NdM`, rolls twice via `DiceRoller.roll_multiple`, takes max/min, adds the modifier,
 and formats both roll details. Otherwise rolls once, adds the modifier, and appends
 per-die detail. Returns a Markdown string with a 🎲 prefix and a bolded total.
 
-**Return** — `Command(goto="supervisor")` with one new `AIMessage`. That return
-edge is what produces the extra supervisor hop described in
-`docs/ARCHITECTURE.md`. The hop itself is cheap (~0.65 s); what makes it the most
-expensive thing in the graph is the ~40 s researcher answer it goes on to
-trigger. PR-04 lets this node terminate directly instead.
+**Return** — `Command(goto="__end__")` with one new `AIMessage`. It returned to
+the supervisor until PR-04. The hop itself was cheap (~0.65 s); what made it the
+most expensive thing in the graph was the ~40 s researcher answer it went on to
+trigger, because the supervisor then routed on the roll *result*. A roll is a
+complete answer, so the node now terminates. A dice request measures 4.9 s end to
+end, down from ~45 s.
 
 It previously did `dict(state)` — a shallow copy — and then appended to
 `updated_state["messages"]`, writing through to the graph's own list. Fixed in
