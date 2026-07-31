@@ -145,13 +145,14 @@ PR-01 through PR-04 and PR-06 have landed. Of the original plan:
   each narration into `game_state`. First token ~3.6 s. The last stubbed agent.
 - **Dice** — parsed deterministically, no LLM call on the common path (0.0 s,
   down from 4.6 s), and no more invented modifiers.
+- **Ingestion** — `scripts/ingest.py`; the index is reproducible from the repo
+  for the first time, and `load`/`build` are separate functions that say so.
 
 ## What remains
 
 In dependency order — see `SPECS.md` for the executable version.
 
-1. **PR-07** — `scripts/ingest.py`, so the index is reproducible.
-2. **PR-08** — researcher citations and corrective RAG. Two things PR-06 turned
+1. **PR-08** — researcher citations and corrective RAG. Two things PR-06 turned
    up belong here: the researcher does not stream (its first token measured
    **61.8 s** on a cold embedding model), and its answers are unbounded — one
    rules question measured **147 s**. `dungeon_master` solves both with
