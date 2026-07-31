@@ -2,12 +2,22 @@ import sys
 import traceback
 import uuid
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessageChunk, HumanMessage
 
 from src.graph.game_orchestrator import create_game_graph, create_sqlite_checkpointer
 from src.graph.game_state import create_default_game_state
 
 EXIT_COMMANDS = {"quit", "exit"}
+
+# Nodes whose output is prose the player reads, so it is worth showing token by
+# token. At 4.4 tok/s a finished narration is ~25 s away; the first token is ~3.5 s
+# away. Everything else in the graph — routing decisions, the dice parse — emits
+# tokens too, and none of it is for the player.
+STREAMING_NODES = {"dungeon_master", "researcher"}
+
+# A node can make more than one LLM call — the DM narrates, then extracts world
+# state into JSON. Both carry the same node name, so the second is tagged.
+INTERNAL_TAG = "internal"
 
 
 def _render(message) -> None:
@@ -15,6 +25,44 @@ def _render(message) -> None:
     name = getattr(message, "name", None)
     content = getattr(message, "content", str(message))
     print(f"\n[{name or 'assistant'}] {content}\n")
+
+
+def _run_turn(game_graph, turn, config) -> set:
+    """Streams a turn, printing prose as it arrives.
+
+    Returns the set of agent names already printed live, so the caller does not
+    print them a second time from the final state.
+    """
+    streamed = set()
+
+    for chunk, metadata in game_graph.stream(
+        turn, config=config, stream_mode="messages"
+    ):
+        # Two kinds of thing arrive here: AIMessageChunk for each token, and the
+        # finished AIMessage the node writes to state. Printing both shows every
+        # narration twice.
+        if not isinstance(chunk, AIMessageChunk):
+            continue
+
+        node = metadata.get("langgraph_node")
+        if node not in STREAMING_NODES:
+            continue
+        if INTERNAL_TAG in (metadata.get("tags") or ()):
+            continue
+
+        text = getattr(chunk, "content", "")
+        if not text:
+            continue
+
+        if node not in streamed:
+            print(f"\n[{node}] ", end="", flush=True)
+            streamed.add(node)
+        print(text, end="", flush=True)
+
+    if streamed:
+        print("\n")
+
+    return streamed
 
 
 def main() -> None:
@@ -71,17 +119,22 @@ def main() -> None:
             before = 0
 
         try:
-            result = game_graph.invoke(turn, config=config)
+            streamed = _run_turn(game_graph, turn, config)
+            messages = game_graph.get_state(config).values.get("messages", [])
         except Exception as exc:
             print(f"\nAn error occurred: {exc}")
             traceback.print_exc()
             continue
 
-        # Show only what this turn produced. The session continues until the
-        # user asks to leave — no agent decides that on their behalf.
-        for message in result.get("messages", [])[before:]:
-            if not isinstance(message, HumanMessage):
-                _render(message)
+        # Show only what this turn produced, and only what was not already
+        # printed token by token. The session continues until the user asks to
+        # leave — no agent decides that on their behalf.
+        for message in messages[before:]:
+            if isinstance(message, HumanMessage):
+                continue
+            if getattr(message, "name", None) in streamed:
+                continue
+            _render(message)
 
 
 if __name__ == "__main__":
