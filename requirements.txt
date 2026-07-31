@@ -1,11 +1,50 @@
-langchain
-langchain-community
-langchain-ollama
-pymupdf
-langchainhub 
-langchain 
-langgraph 
-tavily-python
-sentence-transformers
-langchain-huggingface
-langchain-chroma
+# Pinned 2026-07-31. Requires Python >=3.11 (see pyproject.toml).
+#
+# WARNING: these pin the LangChain/LangGraph 1.x line. This codebase was written
+# against the 0.x line (Feb 2025) and has NOT been verified against 1.x — no
+# 3.11+ interpreter was available on the machine where they were set. Expect
+# breakage on first install; see the PR-01 notes in the pull request body.
+
+# --- orchestration -----------------------------------------------------------
+langgraph==1.2.10
+langchain==1.3.14
+langchain-core==1.5.3
+langchain-community==0.4.2
+
+# --- model providers ---------------------------------------------------------
+langchain-ollama==1.1.0          # replaced by langchain-anthropic in PR-02
+
+# --- retrieval ---------------------------------------------------------------
+langchain-chroma==1.1.0
+chromadb==1.5.9
+langchain-huggingface==1.2.2
+sentence-transformers==5.6.1     # embeddings stay local; do not swap (docs/RAG_PIPELINE.md)
+pymupdf==1.28.0
+
+# torch arrives via sentence-transformers (which needs only torch>=1.11.0).
+# On Intel macOS the last release with an x86_64 wheel is 2.2.2, and its newest
+# interpreter tag is cp312 — hence requires-python >=3.11 but *use 3.12*, not
+# 3.13+. Without this constraint pip resolves to a version with no matching
+# wheel and falls back to a source build. Inert on every other platform.
+torch==2.2.2; sys_platform == "darwin" and platform_machine == "x86_64"
+
+# transformers 5.x needs torch>=2.4 — only under an extra, so it installs
+# happily against torch 2.2.2 and then fails at runtime with
+# "NameError: name 'torch' is not defined", taking embeddings (and therefore
+# all retrieval) down with it. 4.57.6 is the newest release that needs only
+# torch>=2.2, and it satisfies sentence-transformers' >=4.41.0,<6.0.0.
+transformers==4.57.6
+
+# torch 2.2.2 is compiled against the numpy 1.x C ABI. With numpy 2.x installed
+# every tensor<->array conversion raises "RuntimeError: Numpy is not available",
+# which breaks sentence-transformers encoding. Same platform scope as the torch
+# pin above, since torch 2.2.2 is the only reason this is needed.
+numpy==1.26.4; sys_platform == "darwin" and platform_machine == "x86_64"
+
+# --- dev ---------------------------------------------------------------------
+pytest==9.1.1
+
+# Removed in PR-01:
+#   langchain      (was listed twice)
+#   langchainhub   (only reachable via the unused src/pipelines/generator.py)
+#   tavily-python  (never imported)
