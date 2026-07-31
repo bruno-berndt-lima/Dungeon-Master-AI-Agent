@@ -23,7 +23,7 @@ class GameSupervisor(BaseAgent):
     
     def __init__(self):
         super().__init__("supervisor")
-        self.llm = create_llm()
+        self.llm = create_llm(self.agent_type)
         self.system_prompt = SUPERVISOR_PROMPT
 
     def get_definition(self) -> str:
