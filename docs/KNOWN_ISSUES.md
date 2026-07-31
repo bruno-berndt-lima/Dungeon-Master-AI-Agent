@@ -18,13 +18,13 @@ as items close.
 | 6 | No terminal condition after a dice roll | **fixed** (PR-04) |
 | 7 | `GameState` declares no reducers | **fixed** (PR-03) |
 | 8 | `dice_roller` mutates shared caller state | **fixed** (PR-03) |
-| 9 | `parse_dice_string` only splits on `+` | open — PR-05 (pinned by a strict `xfail`) |
+| 9 | `parse_dice_string` only splits on `+` | **fixed** (PR-05) |
 | 10 | `Chroma` imported twice | open — PR-07 |
 | 11 | `get_vectorstore` ignores its argument | open — PR-07 |
 | 12 | No ingestion entry point | open — PR-07 |
 | 13 | `src/pipelines/` unused | open — PR-08 |
 | 14 | `src/actors/` unused | open — deferred |
-| 15 | Unused declarations | partial — `create_json_llm` removed (PR-02), `Router` now used and `State` deleted (PR-04); `DiceRollRequest` → PR-05, `format_docs` → PR-08 |
+| 15 | Unused declarations | partial — `create_json_llm` (PR-02), `Router`/`State` (PR-04), `DiceRollRequest` (PR-05); `format_docs` → PR-08 |
 | 16 | State keys never written | partial — `last_response` (PR-03) and `game_state` (PR-06) written; three remain |
 | 17 | `tests/` are not tests | **fixed** (PR-01) |
 | 18 | pytest config in the wrong table | **fixed** (PR-01) |
@@ -36,9 +36,10 @@ as items close.
 | 24 | Generation throughput dominates | **mitigated** — #6 removed (PR-04), narration streams (PR-06) |
 | 25 | A 3B model is not accurate enough to route | **fixed** (PR-04) |
 | 26 | Time-to-first-token is dominated by prompt evaluation | partial — DM tuned (PR-06); researcher → PR-08 |
+| 27 | A local model invents dice modifiers | **fixed** (PR-05) |
 
-Five items were found after the initial audit and are described at the bottom
-of this file: #22, #23, #24, #25, #26.
+Six items were found after the initial audit and are described at the bottom
+of this file: #22 through #27.
 
 ## Blocking
 
@@ -132,6 +133,13 @@ does this correctly (`updated_messages = list(...)` first); the two should match
 of `2d6-1`, which then fails `int("6-1")`. In practice the agent extracts modifiers
 separately via the LLM and passes clean notation, so this rarely surfaces — but the
 utility is not safe to call directly with arbitrary notation.
+
+**Fixed in PR-05.** The parser splits on signed terms, skips flat modifiers, and
+**raises** on anything it cannot represent — a subtracted dice term (`2d6-1d4`
+would otherwise roll as `2d6+1d4`), a zero quantity or die size, or junk. Two
+tests that pinned the old lenient behaviour (`""` returning `[]`) were changed
+deliberately: silently returning "no dice" for input we did not understand is the
+same failure as defaulting to `1d20`. It looks like success.
 
 ### 10. `Chroma` imported twice
 
@@ -320,3 +328,31 @@ If the goal is a working system before a rewrite:
 
 Items 4 and 6 get substantially easier after the provider swap — see
 `docs/REFACTOR_NOTES.md`.
+
+### 27. A local model invents dice modifiers
+
+Measured while replacing the dice parser with structured output. Asked to
+extract a modifier, `llama3.2:3b` returned numbers that were nowhere in the
+request:
+
+| Request | Modifier returned | Correct |
+|---|---|---|
+| `roll 2d8 + 1d6 for damage` | **+1** | 0 |
+| `roll a d20 with advantage for stealth` | **+5** | 0 |
+| `roll 1d20 with disadvantage` | **-1** | 0 |
+| `roll for initiative` | **+2** | 0 |
+
+4/7 correct. A sharper prompt got it to 6/7; `qwen2.5:7b` got 7/7 but costs
+**9.5 s** against 4.6 s. Every wrong answer silently changes the number the
+player gets, which is worse than a visible failure.
+
+**Fixed in PR-05, by not asking.** A dice expression is a formal language, so it
+is read with a regex: notation, modifier, advantage, and stated purpose all come
+straight from the request. The model is consulted only when the request names no
+dice at all (`"roll for initiative"`), and even then the modifier is taken from
+the player's words — because a number the request does not contain is a number
+the model made up. That last guard was added after `1d20+2` came back for
+`"roll for initiative"`: the invented bonus had been folded into the *notation*
+string, sliding past a check that only looked at the modifier field.
+
+The common path now costs **no LLM call at all** — 0.0 s, down from 4.6 s.

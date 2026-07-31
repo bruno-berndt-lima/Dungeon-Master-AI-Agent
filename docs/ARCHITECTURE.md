@@ -73,9 +73,10 @@ destinations from the return type annotation on `process_task`.
 
    - **`researcher`** — RAG. `latest_message → retriever → context → prompt → LLM → str`.
      Returns `Command(goto="__end__")` with one new `AIMessage`.
-   - **`dice_roller`** — LLM-parses the request into structured fields, rolls with the
-     pure `DiceRoller` utility, returns `Command(goto="__end__")` with one new
-     `AIMessage`. It used to return to the supervisor; see below.
+   - **`dice_roller`** — reads the dice expression out of the request with a
+     regex, rolls with the pure `DiceRoller` utility, returns
+     `Command(goto="__end__")` with one new `AIMessage`. No LLM call unless the
+     request names no dice. It used to return to the supervisor; see below.
    - **`dungeon_master`** — narrates the world's response, streaming as it goes,
      then makes a second structured call to lift durable facts (location,
      inventory, effects) into `game_state`. Returns `Command(goto="__end__")`.
@@ -187,12 +188,13 @@ is a strict "return only the agent name" instruction; the dice roller prompt des
 rolling behavior the agent doesn't actually delegate to the LLM (the LLM only parses;
 `DiceRoller` rolls).
 
-**`src/utils/dice.py`** — the cleanest module in the repo. `DiceRoller.parse_dice_string`
-splits on `+` and yields `(quantity, sides)` tuples; `roll_single_type` and
-`roll_multiple` return `DiceRoll` dataclasses carrying `dice_type`, `results`, `total`.
-No LLM, no I/O, fully deterministic given `random`. Note it only handles `+` — a
-negative modifier written as `2d6-1` is silently dropped by the parser (the agent
-extracts modifiers separately via the LLM, which is why this mostly works in practice).
+**`src/utils/dice.py`** — the cleanest module in the repo. `parse_dice_string`
+splits on signed terms and yields `(quantity, sides)` tuples, skipping flat
+modifiers (the caller adds those) and **raising** on anything the return type
+cannot represent: a subtracted dice term, a zero quantity or die size, junk.
+`roll_single_type` and `roll_multiple` return `DiceRoll` dataclasses carrying
+`dice_type`, `results`, `total`. No LLM, no I/O, fully deterministic given
+`random`.
 
 **`src/utils/llm_logger.py`** — `LLMInteraction` dataclass plus `LLMLogger`, which
 opens the day's JSONL file per write and appends. `get_recent_interactions(limit)`
