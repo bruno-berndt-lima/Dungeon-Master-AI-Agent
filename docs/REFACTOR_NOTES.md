@@ -81,10 +81,11 @@ This is what makes the planned improvements viable without changing provider:
 - **PR-04** — done. The supervisor's substring-match ladder became
   `with_structured_output(Router)` over the `Router` TypedDict that had been
   sitting unused in the module. Confirmed working on both installed models.
-- **PR-05** — the dice parser's defensive stack (markdown-fence stripping,
-  `PQXYpqxy` placeholder detection, string-modifier coercion, description
-  salvage) collapses into one strict schema. All of it exists only because a 3B
-  model could not be trusted to emit clean JSON.
+- **PR-05** — done, though not the way this predicted. The defensive stack was
+  deleted, but structured output did not replace it: a regex did. Constrained
+  decoding guarantees a well-*typed* answer, not a *true* one, and the 3B kept
+  inventing modifiers that were nowhere in the request (#27). Dice notation is a
+  formal language; the right tool was a parser.
 - **PR-08** — `src/pipelines/grader.py` depends on `with_structured_output`,
   which is why it was never wired in. It works now.
 
@@ -142,14 +143,15 @@ PR-01 through PR-04 and PR-06 have landed. Of the original plan:
   directly. A dice request now costs 4.9 s instead of ~45 s.
 - **Dungeon Master** — implemented and streaming, with world state extracted from
   each narration into `game_state`. First token ~3.6 s. The last stubbed agent.
+- **Dice** — parsed deterministically, no LLM call on the common path (0.0 s,
+  down from 4.6 s), and no more invented modifiers.
 
 ## What remains
 
 In dependency order — see `SPECS.md` for the executable version.
 
-1. **PR-05** — strict-schema dice parsing; delete the defensive stack.
-2. **PR-07** — `scripts/ingest.py`, so the index is reproducible.
-3. **PR-08** — researcher citations and corrective RAG. Two things PR-06 turned
+1. **PR-07** — `scripts/ingest.py`, so the index is reproducible.
+2. **PR-08** — researcher citations and corrective RAG. Two things PR-06 turned
    up belong here: the researcher does not stream (its first token measured
    **61.8 s** on a cold embedding model), and its answers are unbounded — one
    rules question measured **147 s**. `dungeon_master` solves both with

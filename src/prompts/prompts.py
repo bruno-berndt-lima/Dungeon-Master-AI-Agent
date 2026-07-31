@@ -18,6 +18,21 @@ Rules of the table:
 """
 
 
+# The prompt that actually runs inside DiceRollerAgent. DICE_ROLLER_PROMPT below
+# describes rolling behaviour the agent never delegates to a model — the LLM only
+# parses the request, and `DiceRoller` does every roll.
+DICE_PARSE_PROMPT = """Extract the dice roll from the player's request.
+
+- dice_notation: the dice to roll, in NdM form, joined by "+" when there are
+  several. "roll a d20" is "1d20". Do not include flat modifiers here.
+- modifier: the flat number added to the total, negative if subtracted. 0 if none.
+- has_advantage / has_disadvantage: true only if the request says so.
+- description: what the roll is for, in a few words. Empty if not stated.
+
+Take the dice from the request as written. Never substitute an example.
+"""
+
+
 # Extracts durable world facts from a narration so they survive into the next
 # turn. Kept separate from DUNGEON_MASTER_PROMPT: the narration streams to the
 # player, and mixing prose and JSON in one call would mean streaming raw JSON.
