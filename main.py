@@ -27,13 +27,14 @@ def _render(message) -> None:
     print(f"\n[{name or 'assistant'}] {content}\n")
 
 
-def _run_turn(game_graph, turn, config) -> set:
+def _run_turn(game_graph, turn, config) -> dict:
     """Streams a turn, printing prose as it arrives.
 
-    Returns the set of agent names already printed live, so the caller does not
-    print them a second time from the final state.
+    Returns {agent name: text already printed live}, so the caller can skip
+    reprinting it — and can still show anything the node appended after the
+    model finished, such as the researcher's list of sources.
     """
-    streamed = set()
+    streamed = {}
 
     for chunk, metadata in game_graph.stream(
         turn, config=config, stream_mode="messages"
@@ -56,11 +57,9 @@ def _run_turn(game_graph, turn, config) -> set:
 
         if node not in streamed:
             print(f"\n[{node}] ", end="", flush=True)
-            streamed.add(node)
+            streamed[node] = ""
+        streamed[node] += text
         print(text, end="", flush=True)
-
-    if streamed:
-        print("\n")
 
     return streamed
 
@@ -132,8 +131,21 @@ def main() -> None:
         for message in messages[before:]:
             if isinstance(message, HumanMessage):
                 continue
-            if getattr(message, "name", None) in streamed:
+
+            name = getattr(message, "name", None)
+            content = getattr(message, "content", "")
+
+            if name in streamed:
+                # A node may add to its answer after the model stops — the
+                # researcher appends the passages it used. Show the tail rather
+                # than reprinting the whole thing.
+                already = streamed[name]
+                tail = content[len(already):] if content.startswith(already) else ""
+                if tail.strip():
+                    print(tail, end="", flush=True)
+                print("\n")
                 continue
+
             _render(message)
 
 
