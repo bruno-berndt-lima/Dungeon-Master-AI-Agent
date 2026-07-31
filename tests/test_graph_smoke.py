@@ -45,9 +45,16 @@ def test_default_state_declares_every_field():
     expected = {
         "messages", "current_task", "active_agent", "game_state", "players",
         "npcs", "current_speaker", "turn_order", "last_response",
-        "requires_player_input", "next_agent",
+        "requires_player_input",
     }
     assert set(state) == expected
+
+
+def test_next_agent_is_gone():
+    """Routing belongs to Command(goto=...). A next_agent mirror could disagree
+    with it, and main.py used to exit the REPL whenever it read "FINISH" —
+    which ResearcherAgent set on every successful answer."""
+    assert "next_agent" not in create_default_game_state()
 
 
 def test_default_game_state_is_a_dict():

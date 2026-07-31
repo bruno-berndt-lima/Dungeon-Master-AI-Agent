@@ -171,7 +171,22 @@ built from its 384-dim vectors and swapping it invalidates the index.
 
 **Branch** `refactor/state-contract`
 
-**In scope** `src/graph/game_state.py`, `src/graph/game_orchestrator.py`, `main.py`
+**In scope** `src/graph/game_state.py`, `src/graph/game_orchestrator.py`, `main.py`,
+`src/agents/base_agent.py`, `src/agents/supervisor.py`, `src/agents/researcher.py`,
+`src/agents/dice_roller.py`, `requirements.txt`, `tests/`
+
+> **Scope widened during execution (approved).** Removing the `next_agent` field
+> means touching every writer — `supervisor.py` and `researcher.py` both set it,
+> and `main.py` read it. `requirements.txt` gains
+> `langgraph-checkpoint-sqlite` for the checkpointer.
+>
+> A correction to task 1 below: `add_messages` merges on **message id**, not
+> position, and messages read out of state already carry ids. The pre-existing
+> whole-list return therefore did *not* corrupt history. Returning deltas is
+> still preferred — smaller payloads, idiomatic — but it is a style improvement,
+> not the correctness fix this spec originally implied. The real hazard is
+> rebuilding message objects from scratch, which drops their ids and does
+> duplicate; `tests/test_state_contract.py` pins both behaviors.
 
 **Task**
 1. `messages: Annotated[Sequence[BaseMessage], add_messages]` — removes the
