@@ -5,7 +5,7 @@ none are speculative. Ordered by impact.
 
 ## Status ledger
 
-Numbering is stable — `SPECS.md` references these IDs, so nothing is renumbered
+Numbering is stable — `docs/SPECS.md` references these IDs, so nothing is renumbered
 as items close.
 
 | # | Issue | Status |
@@ -30,7 +30,7 @@ as items close.
 | 18 | pytest config in the wrong table | **fixed** (PR-01) |
 | 19 | `requirements.txt` unpinned | **fixed** (PR-01) |
 | 20 | Large binaries committed | **fixed** (PR-10) — history rewritten, indexes gitignored; repo 256 MB → <1 MB |
-| 21 | `env_activation.txt` is Windows-only | open |
+| 21 | `env_activation.txt` is Windows-only | **fixed** — file deleted |
 | 22 | `create_llm` model name does not resolve | **fixed** (PR-02) |
 | 23 | Chroma dirties the repo on read | **fixed** (PR-10) — `chroma_db/` is gitignored, so its read-churn is invisible to git |
 | 24 | Generation throughput dominates | **mitigated** — #6 removed (PR-04), narration streams (PR-06) |
@@ -265,6 +265,10 @@ unreachable.
 
 Contains `.\venv\Scripts\activate`. Fine as a personal note; misleading on this macOS
 checkout, where the command is `source venv/bin/activate`.
+
+**Deleted.** The README carries the correct command for the platform this runs
+on. `conftest.py` went at the same time — it existed to put the repo root on
+`sys.path`, which `pythonpath = ["."]` in `pyproject.toml` has done since PR-01.
 
 ## Found after the initial audit
 

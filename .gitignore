@@ -115,3 +115,8 @@ Documents/*.pdf
 # which used to dirty the working tree constantly (KNOWN_ISSUES #23).
 chroma_db/
 chroma_db_full/
+
+# Agent interaction logs are runtime output. One 2025 sample is kept in the
+# repo because three docs cite it as evidence for KNOWN_ISSUES #6.
+logs/llm_interactions/*.jsonl
+!logs/llm_interactions/llm_log_2025-03-31.jsonl

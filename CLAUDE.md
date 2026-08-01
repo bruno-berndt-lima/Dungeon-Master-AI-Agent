@@ -159,7 +159,7 @@ way, so the gate stays fast and runnable offline.
 
 ## Further reading
 
-- `SPECS.md` — **the execution contract for the refactor: one spec per PR**
+- `docs/SPECS.md` — **the execution contract for the refactor: one spec per PR**
 - `docs/ARCHITECTURE.md` — how a turn flows through the system, module by module
 - `docs/AGENTS.md` — per-agent contracts, prompts, and routing behavior
 - `docs/RAG_PIPELINE.md` — retrieval, chunking, the index, and the unused CRAG parts

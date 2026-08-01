@@ -155,7 +155,7 @@ PR-01 through PR-04 and PR-06 have landed. Of the original plan:
 
 ## What remains
 
-**Every PR in `SPECS.md` has landed.** What is left was never scheduled.
+**Every PR in `docs/SPECS.md` has landed.** What is left was never scheduled.
 
 1. **The `chroma_db/` decision (#20, #23).** Gitignoring the store would stop it
    dirtying the working tree on every read *and* remove 4,778 chunks of verbatim
