@@ -304,7 +304,7 @@ delete `players`, `npcs`, `current_speaker`, `turn_order`; delete
 
 ### Phase 2 — The DM becomes a tool user
 
-**PR-17 — Tools (M)**
+**PR-17 — Tools (M)** — *landed 2026-09-18; see `docs/TOOLS.md`. `resolve_check` was added for the player's `/roll`; `heal`, `remove_condition`, `end_encounter` and `rest` were added because PR-18 needs them.*
 `feat/dm-tools`. `src/tools/` — thin, validated wrappers over the engine, each
 returning a short string the model can read:
 `get_scene()`, `request_check(player, ability, skill?, dc)`,
