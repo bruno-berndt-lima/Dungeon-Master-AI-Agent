@@ -12,10 +12,15 @@ from src.models.llm import (
     AGENT_MODELS,
     DEFAULT_HOST,
     DEFAULT_MODEL,
+    EMBEDDING_BATCH_SIZE,
+    EMBEDDING_MODEL,
     OllamaChat,
+    OllamaEmbed,
     OllamaUnavailableError,
     _friendly_message,
+    create_embedding_model,
     create_llm,
+    resolve_embedding_model,
     resolve_host,
     resolve_model,
 )
@@ -28,6 +33,7 @@ def clean_env(monkeypatch):
     """Start every test from an unconfigured environment."""
     monkeypatch.delenv("OLLAMA_HOST", raising=False)
     monkeypatch.delenv("DND_MODEL_DEFAULT", raising=False)
+    monkeypatch.delenv("DND_EMBEDDING_MODEL", raising=False)
     for agent in AGENT_TYPES:
         monkeypatch.delenv(f"DND_MODEL_{agent.upper()}", raising=False)
 
@@ -155,3 +161,78 @@ def test_invoke_passes_other_errors_through(monkeypatch):
 
     with pytest.raises(ValueError, match="bad prompt template"):
         llm.invoke("hello")
+
+
+# --- embeddings -------------------------------------------------------------
+#
+# Same boundary, same rules: no network at construction, host from the
+# environment, failures in plain language. Two things are specific to
+# embeddings and are pinned here because each was found the hard way.
+
+
+@pytest.fixture
+def embed(monkeypatch):
+    """An `OllamaEmbed` whose daemon round-trip is replaced by a recorder."""
+    calls = []
+
+    def fake_embed_documents(self, texts):
+        calls.append(list(texts))
+        return [[float(len(t))] for t in texts]
+
+    def fake_embed_query(self, text):
+        calls.append([text])
+        return [float(len(text))]
+
+    from langchain_ollama import OllamaEmbeddings
+    monkeypatch.setattr(OllamaEmbeddings, "embed_documents", fake_embed_documents)
+    monkeypatch.setattr(OllamaEmbeddings, "embed_query", fake_embed_query)
+    return calls
+
+
+def test_embedding_model_defaults_and_is_overridable(monkeypatch):
+    assert resolve_embedding_model() == EMBEDDING_MODEL
+    monkeypatch.setenv("DND_EMBEDDING_MODEL", "all-minilm")
+    assert resolve_embedding_model() == "all-minilm"
+    monkeypatch.setenv("DND_EMBEDDING_MODEL", "   ")
+    assert resolve_embedding_model() == EMBEDDING_MODEL
+
+
+def test_create_embedding_model_makes_no_network_call(monkeypatch):
+    import urllib.request
+
+    def boom(*args, **kwargs):
+        raise AssertionError("network touched at construction")
+
+    monkeypatch.setattr(urllib.request, "urlopen", boom)
+    client = create_embedding_model()
+    assert isinstance(client, OllamaEmbed)
+    assert client.base_url == DEFAULT_HOST
+
+
+def test_embedding_host_follows_ollama_host(monkeypatch):
+    monkeypatch.setenv("OLLAMA_HOST", "m4.tailnet:11434")
+    assert create_embedding_model().base_url == "http://m4.tailnet:11434"
+
+
+def test_documents_are_embedded_in_batches(embed):
+    """One request with the whole corpus crashed the daemon's tokenizer."""
+    client = create_embedding_model()
+    texts = [f"chunk {i}" for i in range(EMBEDDING_BATCH_SIZE * 2 + 5)]
+
+    vectors = client.embed_documents(texts)
+
+    assert len(vectors) == len(texts)
+    assert [len(c) for c in embed] == [EMBEDDING_BATCH_SIZE, EMBEDDING_BATCH_SIZE, 5]
+    assert [t for call in embed for t in call] == texts   # order preserved, text untouched
+
+
+def test_embedding_translates_a_dead_daemon(monkeypatch):
+    from langchain_ollama import OllamaEmbeddings
+
+    def dead(self, text):
+        raise ConnectionError("connection refused")
+
+    monkeypatch.setattr(OllamaEmbeddings, "embed_query", dead)
+    with pytest.raises(OllamaUnavailableError) as info:
+        create_embedding_model().embed_query("q")
+    assert DEFAULT_HOST in str(info.value)

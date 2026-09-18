@@ -29,9 +29,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.config import (
     CHROMA_DB_DIRECTORY,
     DOCUMENT_PATHS,
-    EMBEDDING_MODEL_NAME,
     FULL_CHROMA_DB_DIRECTORY,
     SRD_DIRECTORY,
+)
+from src.models.llm import (
+    OllamaUnavailableError,
+    list_installed_models,
+    resolve_embedding_model,
+    resolve_host,
 )
 from src.data.loader import load_documents
 from src.data.processing import CHUNK_OVERLAP, CHUNK_SIZE, split_documents
@@ -104,6 +109,8 @@ def main() -> int:
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+    # The embedding client logs one line per batch request; 49 of them is noise.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
     if args.persist_directory is None:
         args.persist_directory = (
@@ -154,7 +161,23 @@ def main() -> int:
         print(f"\nDry run — nothing written. {time.perf_counter() - started:.1f}s")
         return 0
 
-    print(f"Embedding with {EMBEDDING_MODEL_NAME} (this is the slow part)...")
+    # Fail before the work, not 3,000 chunks into it: the daemon must be up and
+    # must have the embedding model pulled.
+    embedding_model = resolve_embedding_model()
+    try:
+        installed = list_installed_models()
+    except OllamaUnavailableError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    if not any(tag == embedding_model or tag.split(":")[0] == embedding_model for tag in installed):
+        print(
+            f"The Ollama daemon at {resolve_host()} has no embedding model "
+            f"'{embedding_model}'. Run `ollama pull {embedding_model}` first.",
+            file=sys.stderr,
+        )
+        return 1
+
+    print(f"Embedding with {embedding_model} via {resolve_host()} (this is the slow part)...")
     store = build_vectorstore(chunks, args.persist_directory, rebuild=args.rebuild)
 
     indexed = store._collection.count()

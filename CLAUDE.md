@@ -22,24 +22,22 @@ python3.12 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 ollama serve &              # or launch Ollama.app
 ollama pull llama3.2:3b     # note the tag: "Llama3.2" does NOT resolve
+ollama pull qwen2.5:7b
+ollama pull all-minilm      # embeddings — also served by the daemon
 python main.py              # interactive REPL; type "quit" or "exit" to leave
 ```
 
-**Use Python 3.12 specifically**, not 3.11 and not 3.13+. Two independent
-constraints pin it:
+**Python 3.11 or newer.** `src/agents/supervisor.py` uses `Literal[*ROUTING_OPTIONS]`
+(PEP 646), a syntax error before 3.11. Verified on 3.12 and 3.13 (2026-09-18).
 
-- `src/agents/supervisor.py` uses `Literal[*ROUTING_OPTIONS]` (PEP 646), a syntax
-  error before **3.11**.
-- On Intel macOS the last torch release with an x86_64 wheel is **2.2.2**, whose
-  newest interpreter tag is **cp312**. Above 3.12 there is no installable torch,
-  and `sentence-transformers` needs it — so retrieval will not build.
-
-`requirements.txt` also pins `transformers` and `numpy` for the same reason; the
-comments there explain each. Both torch/numpy pins carry platform markers, so
-they are inert off Intel macOS.
+It used to be "3.12 exactly": embeddings ran through `sentence-transformers`,
+which needs torch, and on Intel macOS torch's last x86_64 wheel only had a
+cp312 tag. PR-12 moved embeddings to the Ollama daemon, so there is no torch,
+no `transformers`, and no numpy pin in `requirements.txt` any more.
 
 Requires a running Ollama daemon. **Build the index once before first use** —
-`python scripts/ingest.py` takes ~35 s and needs nothing but the repository:
+`python scripts/ingest.py` takes ~2 min on CPU and needs nothing but the repository and
+the daemon:
 
 ```bash
 python scripts/ingest.py        # corpus/srd/ -> chroma_db/
@@ -69,12 +67,12 @@ load of 5–11 s. See `docs/KNOWN_ISSUES.md` #24.
 | `corpus/srd/` | The vendored SRD 5.1 corpus. **Committed** — see `corpus/README.md` |
 | `scripts/ingest.py` | Rebuilds `chroma_db/` from the PDFs; `--rebuild`, `--dry-run` |
 | `src/pipelines/` | `grader`, `rewriter`, `generator` — corrective-RAG parts, currently unused |
-| `src/models/llm.py` | `create_llm(agent_type)` — the single LLM factory; per-agent model map, env overrides |
+| `src/models/llm.py` | `create_llm(agent_type)` and `create_embedding_model()` — the single provider boundary; per-agent model map, env overrides |
 | `src/prompts/prompts.py` | All system prompts, as module-level string constants |
 | `src/utils/dice.py` | Pure dice notation parser + roller (no LLM) |
 | `src/utils/llm_logger.py` | Appends every agent call to `logs/llm_interactions/*.jsonl` |
 | `Documents/` | Where the three 5e PDFs go. **Gitignored** — supply your own; see `Documents/README.md` |
-| `chroma_db/` | Persisted vector store, 3082 chunks, 384-dim. **Gitignored — build it** |
+| `chroma_db/` | Persisted vector store, 3082 chunks, 384-dim (`all-minilm`). **Gitignored — build it** |
 
 ## Conventions to follow
 
@@ -83,7 +81,7 @@ load of 5–11 s. See `docs/KNOWN_ISSUES.md` #24.
   model is chosen there, per role, from `AGENT_MODELS`; a new agent type not in
   that map falls back to `DEFAULT_MODEL`. Change models, host, or provider in that
   one file, never in an agent. Overrides without editing code:
-  `DND_MODEL_<AGENT_TYPE>`, `DND_MODEL_DEFAULT`, `OLLAMA_HOST`.
+  `DND_MODEL_<AGENT_TYPE>`, `DND_MODEL_DEFAULT`, `DND_EMBEDDING_MODEL`, `OLLAMA_HOST`.
 - **Prompts live in `src/prompts/prompts.py`** as `UPPER_SNAKE` constants, imported
   by name. Don't inline system prompts in agent classes. (`DiceRollerAgent._parse_dice_request`
   currently violates this with an inline parse prompt.)
@@ -114,7 +112,7 @@ python scripts/ingest.py --dry-run        # chunk without embedding
 ```
 
 The corpus is committed under `corpus/srd/`, so this needs no PDFs and no
-network. ~35 s, 3,082 chunks.
+network beyond the local daemon. ~2 min on CPU (109 s measured), 3,082 chunks.
 
 **Two corpora, two indexes.** The SRD is a subset of the published books, so if
 you own them:
@@ -135,8 +133,9 @@ tags `book` + `page_number`) → `split_documents`.
 
 `load_vectorstore()` reads and `build_vectorstore(docs, rebuild=...)` writes.
 Building over an existing store is refused, because Chroma appends and would
-duplicate every chunk. Embeddings are `all-MiniLM-L6-v2` (384-dim); changing the
-embedding model invalidates the whole index.
+duplicate every chunk. Embeddings are `all-minilm` (all-MiniLM-L6-v2, 384-dim)
+served by Ollama — `EMBEDDING_MODEL` in `src/models/llm.py`, overridable with
+`DND_EMBEDDING_MODEL`; changing it invalidates the whole index.
 
 ## Testing
 

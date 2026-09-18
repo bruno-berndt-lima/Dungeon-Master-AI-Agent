@@ -20,7 +20,7 @@ import urllib.error
 import urllib.request
 from typing import Optional
 
-from langchain_ollama import ChatOllama
+from langchain_ollama import ChatOllama, OllamaEmbeddings
 
 # Ollama tags are lowercase and carry a size suffix. A bare "llama3.2" resolves
 # to the latest tag; the capitalised name this module used to default to 404s.
@@ -40,6 +40,25 @@ AGENT_MODELS = {
 }
 
 DEFAULT_HOST = "http://localhost:11434"
+
+# Embeddings go through the daemon as well (PR-12). This used to be
+# `all-MiniLM-L6-v2` via sentence-transformers, which dragged in torch — and on
+# Intel macOS torch's last wheel pinned the whole project to Python 3.12
+# exactly. Ollama's `all-minilm` is the same model: the three benchmark queries
+# in docs/RAG_PIPELINE.md reproduce their scores to three decimals, so the index
+# and the relevance threshold carried over unchanged. `nomic-embed-text` was
+# measured alongside it — tied on retrieval, 5.6x slower to index on CPU, and
+# worse with its recommended task prefixes — and not adopted.
+#
+# Changing this model invalidates the index: rebuild with
+# `python scripts/ingest.py --rebuild` and re-measure the bands.
+EMBEDDING_MODEL = "all-minilm"
+ENV_EMBEDDING_MODEL = "DND_EMBEDDING_MODEL"
+
+# Ollama's /api/embed takes a whole list, but one request carrying the full
+# corpus (3,082 chunks) crashed the runner's tokenizer mid-batch. Measured
+# while writing PR-12; 64 per request is comfortably inside what it handles.
+EMBEDDING_BATCH_SIZE = 64
 
 ENV_MODEL_DEFAULT = "DND_MODEL_DEFAULT"
 ENV_MODEL_PREFIX = "DND_MODEL_"
@@ -187,6 +206,52 @@ class OllamaChat(ChatOllama):
             if translated is exc:
                 raise
             raise translated from exc
+
+
+class OllamaEmbed(OllamaEmbeddings):
+    """`OllamaEmbeddings` that batches and fails in plain language.
+
+    Construction makes no network call, so an index can be *opened* offline;
+    the first embed reports a dead daemon or an unpulled model the same way
+    `OllamaChat` does.
+    """
+
+    batch_size: int = EMBEDDING_BATCH_SIZE
+
+    def _translate(self, exc: BaseException) -> BaseException:
+        message = _friendly_message(exc, self.model, self.base_url or resolve_host())
+        return exc if message is None else OllamaUnavailableError(message)
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        vectors: list[list[float]] = []
+        try:
+            for start in range(0, len(texts), self.batch_size):
+                vectors.extend(super().embed_documents(texts[start:start + self.batch_size]))
+        except Exception as exc:
+            translated = self._translate(exc)
+            if translated is exc:
+                raise
+            raise translated from exc
+        return vectors
+
+    def embed_query(self, text: str) -> list[float]:
+        try:
+            return super().embed_query(text)
+        except Exception as exc:
+            translated = self._translate(exc)
+            if translated is exc:
+                raise
+            raise translated from exc
+
+
+def resolve_embedding_model() -> str:
+    """`DND_EMBEDDING_MODEL` if set, else the default."""
+    return os.environ.get(ENV_EMBEDDING_MODEL, "").strip() or EMBEDDING_MODEL
+
+
+def create_embedding_model(model: Optional[str] = None) -> OllamaEmbed:
+    """Build the embedding client. Same host and error language as `create_llm`."""
+    return OllamaEmbed(model=model or resolve_embedding_model(), base_url=resolve_host())
 
 
 def create_llm(

@@ -28,8 +28,8 @@ DND_CHROMA_DIR=chroma_db_full python main.py
 ## You probably don't need them
 
 `python scripts/ingest.py` builds the default index from the **SRD 5.1** corpus
-in `corpus/srd/` in about 35 seconds — 3,082 chunks, 384-dim
-`all-MiniLM-L6-v2` — using nothing but the repository.
+in `corpus/srd/` in about two minutes — 3,082 chunks, 384-dim `all-minilm`
+via the Ollama daemon — using nothing but the repository.
 
 These PDFs buy coverage the SRD does not have: ~40 subclasses instead of 12, ~30
 races instead of 9, ~760 monsters instead of 334, and the DMG's guidance. See
