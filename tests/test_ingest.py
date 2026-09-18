@@ -5,6 +5,7 @@ run in milliseconds and need no model download. The one test that actually
 embeds is marked `slow` and builds three tiny PDFs of its own.
 """
 
+import re
 import sys
 from pathlib import Path
 
@@ -109,6 +110,50 @@ def test_the_researcher_no_longer_builds_its_store():
     )
     assert "get_vectorstore" not in code
     assert "load_vectorstore" in code
+
+
+# --- the PDF loader, offline ------------------------------------------------
+
+def _pdf_with_pages(path, texts):
+    pymupdf = pytest.importorskip("pymupdf")
+    doc = pymupdf.open()
+    for text in texts:
+        doc.new_page().insert_textbox(pymupdf.Rect(50, 50, 550, 750), text, fontsize=11)
+    doc.save(path)
+    doc.close()
+
+
+def test_the_loader_yields_one_document_per_page_with_a_book_and_page(tmp_path):
+    from src.data.loader import load_documents
+
+    pdf_path = tmp_path / "Monster_Manual_5e.pdf"
+    _pdf_with_pages(pdf_path, ["GOBLIN. Small humanoid.", "OGRE. Large giant."])
+
+    docs = load_documents({"Monster Manual": str(pdf_path)})
+
+    assert [d.metadata["page_number"] for d in docs] == [0, 1]
+    assert {d.metadata["book"] for d in docs} == {"Monster Manual"}
+    assert "GOBLIN" in docs[0].page_content and "OGRE" in docs[1].page_content
+    assert docs[0].metadata["total_pages"] == 2
+
+
+def test_the_loader_carries_no_pymupdf_document_info_noise(tmp_path):
+    """PR-08 measured the old loader's metadata at ~600 tokens of prompt noise."""
+    from src.data.loader import load_documents
+
+    pdf_path = tmp_path / "Players_Handbook_5e.pdf"
+    _pdf_with_pages(pdf_path, ["SNEAK ATTACK."])
+
+    (doc,) = load_documents({"Player's Handbook": str(pdf_path)})
+    assert set(doc.metadata) == {"source", "book", "page", "page_number", "total_pages"}
+
+
+def test_langchain_community_is_gone():
+    """It is sunset upstream and warned on every run. Nothing here needs it."""
+    src = Path(__file__).resolve().parent.parent / "src"
+    imports = re.compile(r"^\s*(from|import)\s+langchain_community\b", re.MULTILINE)
+    offenders = [p for p in src.rglob("*.py") if imports.search(p.read_text())]
+    assert offenders == []
 
 
 # --- the whole pipeline, for real -------------------------------------------

@@ -12,6 +12,11 @@ requires-python = ">=3.11"
 pythonpath = ["."]
 testpaths = ["tests"]
 addopts = "-q"
+filterwarnings = [
+    # PyMuPDF's SWIG binding trips this on Python 3.12 at import time. It is
+    # PyMuPDF's to fix, not ours, and the loader tests import it directly.
+    "ignore:builtin type .* has no __module__ attribute:DeprecationWarning",
+]
 markers = [
     "integration: requires the full dependency stack and Python 3.11+ (deselect with -m 'not integration')",
     "slow: builds embeddings or otherwise takes seconds (deselect with -m 'not slow')",

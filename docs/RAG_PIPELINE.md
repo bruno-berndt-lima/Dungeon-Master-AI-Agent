@@ -93,8 +93,10 @@ index lands on the entry the question was about.
 
 ### `src/data/loader.py` — the PDF path
 
-Iterates `DOCUMENT_PATHS`, loads each PDF with `PyMuPDFLoader`, and stamps every
-page with `{"book": <name>, "page_number": doc.metadata["page"]}`. Still
+Iterates `DOCUMENT_PATHS`, reads each PDF with PyMuPDF directly (one
+`Document` per page), and stamps every page with `book` and `page_number`.
+`langchain-community`'s `PyMuPDFLoader` was dropped in PR-11 — the package is
+sunset upstream, and the loader was ten lines behind a class. Still
 supported, still the way to index the full rulebooks — with two caveats recorded
 in KNOWN_ISSUES: the page numbers are PDF indices rather than printed pages
 (#28), and the scans are OCR, so dice notation arrives as `ld6` and `ldl2`.
