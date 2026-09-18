@@ -222,11 +222,13 @@ class ResearcherAgent(BaseAgent):
         """Retrieves and provides D&D-related information.
 
         The annotation says ``__end__`` because that is what this method
-        returns. It previously claimed ``supervisor``; LangGraph derives a
+        returns. It previously claimed the old router node; LangGraph derives a
         node's legal destinations from this annotation, so the mismatch was a
         latent bug rather than a documentation slip.
         """
-        latest_message = self._get_latest_message(state)
+        # `intake` puts the bare question in current_task (the message itself
+        # still says "/rules ...").
+        latest_message = (state.get("current_task") or "").strip() or self._get_latest_message(state)
 
         try:
             docs, info = self.retrieve(latest_message)

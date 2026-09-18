@@ -4,6 +4,7 @@
     python main.py --thread 3f9a1c2e     # pick one up where it left off
     python main.py --thread tuesday      # any name works; new if unseen
     python main.py --list                # what is in the checkpoint database
+    DND_SHOW_TOOLS=1 python main.py      # also print every tool call and its answer
 
 Campaign state lives in the SQLite checkpointer (`game_state.db`), keyed by
 thread id. The REPL is also the development harness for the Discord bot
@@ -11,12 +12,14 @@ thread id. The REPL is also the development harness for the Discord bot
 """
 
 import argparse
+import os
 import sys
 import traceback
 from typing import Optional, Sequence
 
-from langchain_core.messages import AIMessageChunk, HumanMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 
+from src.agents.dungeon_master import NARRATION_TAG
 from src.graph.campaigns import (
     is_new_campaign,
     list_campaigns,
@@ -38,9 +41,12 @@ EXIT_COMMANDS = {"quit", "exit"}
 # tokens too, and none of it is for the player.
 STREAMING_NODES = {"dungeon_master", "researcher"}
 
-# A node can make more than one LLM call — the DM narrates, then extracts world
-# state into JSON. Both carry the same node name, so the second is tagged.
+# A node can make more than one LLM call — the researcher rewrites a query
+# before answering. Both carry the same node name, so the internal one is tagged.
 INTERNAL_TAG = "internal"
+
+# Tool calls and their answers are machinery. Set DND_SHOW_TOOLS=1 to watch them.
+SHOW_TOOLS = bool(os.environ.get("DND_SHOW_TOOLS", "").strip())
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -67,10 +73,10 @@ def format_campaigns(campaigns) -> str:
     if not campaigns:
         return "No campaigns yet. Start one with: python main.py"
     width = max(len("thread"), *(len(c.thread_id) for c in campaigns))
-    lines = [f"{'thread':{width}}  {'last active':16}  {'turns':>5}  where / last input"]
+    lines = [f"{'thread':{width}}  {'last active':16}  {'turns':>5}  party / last input"]
     for c in campaigns:
         when = c.last_active[:16].replace("T", " ")
-        tail = c.location or c.last_prompt
+        tail = ", ".join(c.party) or c.last_prompt
         if len(tail) > 50:
             tail = tail[:47] + "..."
         lines.append(f"{c.thread_id:{width}}  {when:16}  {c.turns:>5}  {tail}")
@@ -85,41 +91,90 @@ def _render(message) -> None:
     print(f"\n[{name or 'assistant'}] {content}\n")
 
 
-def _run_turn(game_graph, turn, config) -> dict:
-    """Streams a turn, printing prose as it arrives.
+def _show_tool_traffic(message) -> None:
+    """The call and its answer, when DND_SHOW_TOOLS is set."""
+    if isinstance(message, ToolMessage):
+        args = (message.additional_kwargs or {}).get("args") or {}
+        shown = ", ".join(f"{k}={v!r}" for k, v in args.items())
+        answer = str(message.content).replace("\n", "\n      ")
+        print(f"\n  ⚙ {message.name}({shown})\n      {answer}")
 
-    Returns {agent name: text already printed live}, so the caller can skip
-    reprinting it — and can still show anything the node appended after the
-    model finished, such as the researcher's list of sources.
+
+def _run_turn(game_graph, turn, config) -> dict:
+    """Streams a turn. Returns {node: text shown for its latest model call}.
+
+    Two kinds of model call reach the screen differently:
+
+    - **Streamed live** — the researcher, and any DM call tagged `narration`
+      (narrate-only mode): it is known to be prose before it starts.
+    - **Buffered** — the DM's planning calls. A reply that ends in a tool call
+      may begin with prose that assumes the tool's outcome; that text is not
+      narration and must never show. So the tokens are held until the call
+      ends, and shown only if no tool call arrived. On the M4 this is a
+      moment; on the Intel CPU it is a pause. KNOWN_ISSUES #29.
     """
     streamed = {}
+    shown = set()  # ids of messages already rendered whole, live
+    buffers = {}  # node -> {"id": call id, "text": ..., "tools": bool}
+
+    def flush(node):
+        held = buffers.pop(node, None)
+        if held and not held["tools"] and held["text"].strip():
+            print(f"\n[{node}] {held['text'].strip()}", end="", flush=True)
+            streamed[node] = held["text"].strip()
 
     for chunk, metadata in game_graph.stream(
         turn, config=config, stream_mode="messages"
     ):
-        # Two kinds of thing arrive here: AIMessageChunk for each token, and the
-        # finished AIMessage the node writes to state. Printing both shows every
-        # narration twice.
+        node = metadata.get("langgraph_node")
+        if isinstance(chunk, ToolMessage):
+            flush("dungeon_master")
+            if SHOW_TOOLS:
+                _show_tool_traffic(chunk)
+            continue
+        # A finished message from a node that does not stream (intake's dice
+        # result, a resolved attack): show it now, in order, and remember it.
+        if isinstance(chunk, AIMessage) and not isinstance(chunk, AIMessageChunk):
+            if node not in STREAMING_NODES and not getattr(chunk, "tool_calls", None):
+                flush("dungeon_master")
+                _render(chunk)
+                if getattr(chunk, "id", None):
+                    shown.add(chunk.id)
+            continue
         if not isinstance(chunk, AIMessageChunk):
             continue
 
-        node = metadata.get("langgraph_node")
         if node not in STREAMING_NODES:
             continue
-        if INTERNAL_TAG in (metadata.get("tags") or ()):
+        tags = metadata.get("tags") or ()
+        if INTERNAL_TAG in tags:
             continue
 
-        text = getattr(chunk, "content", "")
+        text = getattr(chunk, "content", "") or ""
+        live = node != "dungeon_master" or NARRATION_TAG in tags
+
+        if not live:
+            held = buffers.get(node)
+            if held is None or held["id"] != chunk.id:
+                flush(node)
+                held = buffers[node] = {"id": chunk.id, "text": "", "tools": False}
+            if getattr(chunk, "tool_call_chunks", None):
+                held["tools"] = True
+            held["text"] += text
+            continue
+
         if not text:
             continue
-
-        if node not in streamed:
+        if streamed.get(node) is None or buffers.pop(node, None) is not None or streamed.get(("id", node)) != chunk.id:
             print(f"\n[{node}] ", end="", flush=True)
             streamed[node] = ""
+            streamed[("id", node)] = chunk.id
         streamed[node] += text
         print(text, end="", flush=True)
 
-    return streamed
+    for node in list(buffers):
+        flush(node)
+    return {"streamed": {k: v for k, v in streamed.items() if isinstance(k, str)}, "shown": shown}
 
 
 def _state_values(game_graph, config) -> dict:
@@ -137,14 +192,15 @@ def run_repl(game_graph, thread_id: str) -> None:
     values = _state_values(game_graph, config)
     if is_new_campaign(values):
         print(f"New campaign. Resume it later with: python main.py --thread {thread_id}")
+        print("Start with /join <fighter|rogue|cleric|wizard|ranger|barbarian> [as <name>], then say what you do.")
     else:
         print(f"Resuming campaign {thread_id}.")
         print(recap(values))
-    print("Type 'quit' or 'exit' to end the session.\n")
+    print("/help lists the commands. Type 'quit' or 'exit' to end the session.\n")
 
     while True:
         try:
-            user_input = input("Ask a D&D question: ").strip()
+            user_input = input("> ").strip()
         except (EOFError, KeyboardInterrupt):
             print("\nEnding D&D session. Farewell, adventurer!")
             break
@@ -167,7 +223,8 @@ def run_repl(game_graph, thread_id: str) -> None:
         )
 
         try:
-            streamed = _run_turn(game_graph, turn, config)
+            live = _run_turn(game_graph, turn, config)
+            streamed, shown = live["streamed"], live["shown"]
             messages = _state_values(game_graph, config).get("messages") or []
         except Exception as exc:
             print(f"\nAn error occurred: {exc}")
@@ -180,21 +237,30 @@ def run_repl(game_graph, thread_id: str) -> None:
         for message in messages[before:]:
             if isinstance(message, HumanMessage):
                 continue
+            # The DM's tool traffic was shown live (or hidden); never reprint it.
+            if isinstance(message, ToolMessage):
+                continue
+            if isinstance(message, AIMessage) and getattr(message, "tool_calls", None):
+                continue
+
+            if getattr(message, "id", None) in shown:
+                continue
 
             name = getattr(message, "name", None)
-            content = getattr(message, "content", "")
+            content = str(getattr(message, "content", "")).strip()
 
-            if name in streamed:
+            if name in streamed and content.startswith(streamed[name].strip()):
                 # A node may add to its answer after the model stops — the
                 # researcher appends the passages it used. Show the tail rather
                 # than reprinting the whole thing.
-                already = streamed[name]
-                tail = content[len(already):] if content.startswith(already) else ""
+                tail = content[len(streamed[name].strip()):]
                 if tail.strip():
                     print(tail, end="", flush=True)
                 print("\n")
                 continue
 
+            # Not streamed, or not what was streamed: show it whole. Never
+            # swallow a message on the strength of a prefix mismatch.
             _render(message)
 
 

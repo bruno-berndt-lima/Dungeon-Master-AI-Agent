@@ -1,35 +1,27 @@
 # AI Dungeon Master
 
-A D&D 5e Dungeon Master built as a LangGraph multi-agent system. A supervisor
-routes each turn to a narrator, a rules researcher, or a dice roller. Rules
-answers are retrieved from the SRD 5.1 and cite the passage they came from.
-
-**Everything runs locally through [Ollama](https://ollama.com).** No API keys, no
-data leaving the machine.
+A D&D 5e Dungeon Master built on LangGraph. The model narrates; a
+deterministic engine resolves every check, attack, and hit point; the SRD 5.1
+answers rules questions with citations. Everything runs locally through
+[Ollama](https://ollama.com) — no API keys, no data leaving the machine.
 
 ```
-Ask a D&D question: I push open the heavy iron door and step into the crypt.
+> /join rogue as Kara
+[intake] Kara joins the party — Kara (Halfling Rogue 1): AC 14, 9/9 HP.
 
-[dungeon_master] You push open the heavy iron door, feeling the cold draft from
-within. Candles flicker along the walls, casting eerie shadows across ancient
-tombstones. A low murmur of whispers seems to emanate from the far end.
+> I creep toward the guard, keeping to the shadows.
+[dungeon_master] The torchlight ends a pace short of the wall, and you fold
+yourself into the dark beyond it. Kara, give me a Dexterity (Stealth) check.
 
-You see a narrow path leading deeper into the darkness.
+> /roll 15
+[intake] Kara: Dexterity (Stealth) check: d20 15 + 7 = 22 vs DC 13 — success
+[dungeon_master] The guard yawns and turns back to the brazier. You are past him.
 
-Ask a D&D question: how does sneak attack work for rogues
-
-[researcher] Sneak Attack lets a rogue deal an extra 1d6 damage to one creature
-they hit once per turn, if they have advantage on the attack roll or another
-enemy of the target is within 5 feet. The attack must use a finesse or ranged
-weapon.
-
+> /rules how does sneak attack work
+[researcher] Sneak Attack lets a rogue deal an extra 1d6 damage once per turn…
 ---
 **Passages consulted:**
 - SRD 5.1, Class Features: Sneak Attack
-
-Ask a D&D question: roll 2d6+3 for damage
-
-[dice_roller] 🎲 Rolled 2d6 + 3 for damage: **12** (rolled [4, 5])
 ```
 
 ## Getting started
@@ -60,26 +52,25 @@ python main.py --thread 3f9a1c2e    # pick one up where it left off
 ## How a turn works
 
 ```
-                       supervisor
-                     /     |      \
-          dungeon_master  researcher  dice_roller
-                     \     |      /
-                          END
+intake ──▶ dungeon_master ⇄ tools ──▶ END        play
+   ├─────▶ researcher ──────────────▶ END        /rules
+   └─────────────────────────────────▶ END        /roll, /join, /party, bare dice
 ```
 
-Every worker ends the turn — nothing routes back — so a turn costs exactly one
-routing decision and one worker.
+`intake` routes in code — no model decides where a turn goes. The Dungeon
+Master is called with its tools bound (`request_check`, `attack`,
+`start_encounter`, `lookup_rules`, …), runs at most four tool round trips, and
+always ends with narration. **The model never produces a number:** rolls,
+DCs, damage, and hit points come from `src/engine/`, and the DM narrates what
+the tools report. A requested roll ends the DM's turn; the player's `/roll`
+resolves it against their sheet and the DM narrates the outcome.
 
-| Agent | Job | Model |
+| Node | Job | Model |
 |---|---|---|
-| `supervisor` | Route the turn | `qwen2.5:7b` |
-| `dungeon_master` | Narrate the world's response, stream it, track location and inventory | `qwen2.5:7b` |
-| `researcher` | Answer rules questions from the SRD, with citations | `qwen2.5:7b` |
-| `dice_roller` | Parse and roll dice | `llama3.2:3b` |
-
-Dice requests never reach a model: the notation is read with a parser, so
-`roll 2d6+3` is instant and exact. The supervisor is asked only when a request
-is genuinely ambiguous.
+| `intake` | Route the turn; roll bare dice; resolve pending rolls | none |
+| `dungeon_master` | Narrate, choose tools | `qwen2.5:7b` |
+| `tools` | Run the tools against the engine | none |
+| `researcher` | Answer `/rules` questions from the SRD, with citations | `qwen2.5:7b` |
 
 ## The corpus
 
@@ -103,7 +94,7 @@ this is CPU-only. Expect an Apple Silicon or CUDA machine to be far quicker.
 | | |
 |---|---|
 | Dice roll | instant (no model call) |
-| Routing | ~2.7 s |
+| Routing | 0 s — code, since PR-18 |
 | Narration, first token | ~3.6 s, then streams |
 | Rules answer | ~26 s |
 
@@ -114,9 +105,10 @@ Generation throughput is the bottleneck, not the architecture: 11.4 tok/s on the
 
 | Path | |
 |---|---|
-| `main.py` | REPL; streams the graph token by token |
-| `src/agents/` | `supervisor`, `dungeon_master`, `researcher`, `dice_roller`, `base_agent` |
-| `src/graph/` | `StateGraph` wiring and the `GameState` contract |
+| `main.py` | REPL; `--thread` / `--list`; streams the graph token by token |
+| `src/agents/` | `dungeon_master` (the tool loop), `researcher`, `base_agent` |
+| `src/engine/`, `src/srd/`, `src/tools/` | The deterministic 5e engine, the SRD as data, and the DM's tools over both |
+| `src/graph/` | `intake` routing, `StateGraph` wiring, the `GameState` contract, campaigns |
 | `src/models/llm.py` | The single LLM factory — per-agent models, env overrides |
 | `src/data/` | SRD and PDF loaders, chunking, the Chroma store |
 | `src/prompts/` | Every system prompt, as module constants |
@@ -128,7 +120,7 @@ Generation throughput is the bottleneck, not the architecture: 11.4 tok/s on the
 ## Tests
 
 ```bash
-pytest                        # 642 tests
+pytest                        # 606 tests
 pytest -m "not integration"   # unit only, no dependency stack
 pytest -m slow                # includes a real embedding round-trip (needs the daemon)
 ```
@@ -139,7 +131,8 @@ Nothing in the suite calls a model, so the gate stays fast and runs offline.
 
 - [`CLAUDE.md`](CLAUDE.md) — orientation and conventions
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — how a turn flows, module by module
-- [`docs/AGENTS.md`](docs/AGENTS.md) — per-agent contracts and prompts
+- [`docs/DM.md`](docs/DM.md) — the Dungeon Master's tool loop
+- [`docs/ENGINE.md`](docs/ENGINE.md) and [`docs/TOOLS.md`](docs/TOOLS.md) — the engine and the tools over it
 - [`docs/RAG_PIPELINE.md`](docs/RAG_PIPELINE.md) — retrieval, chunking, corrective RAG
 - [`docs/KNOWN_ISSUES.md`](docs/KNOWN_ISSUES.md) — verified bugs and dead code, with a status ledger
 - [`docs/REFACTOR_NOTES.md`](docs/REFACTOR_NOTES.md) — direction and measured performance

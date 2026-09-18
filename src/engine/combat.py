@@ -443,6 +443,20 @@ def start_encounter(
     return encounter, events
 
 
+def move_first(encounter: Encounter, combatant_id: str) -> Tuple[Encounter, Events]:
+    """Put a combatant at the top of the order: they opened the fight.
+
+    A player who declares an attack on an unsuspecting creature has, in
+    effect, surprised it — their blow lands before initiative plays out.
+    """
+    actor = encounter.get(combatant_id)
+    if encounter.order[0] == actor.id:
+        return encounter, []
+    order = [actor.id] + [i for i in encounter.order if i != actor.id]
+    moved = encounter.model_copy(update={"order": order, "turn_index": 0})
+    return moved, [Event(kind="surprise", actor=actor.id, text=f"{actor.id} strikes before anyone can react.")]
+
+
 def _check_end(encounter: Encounter) -> Tuple[Encounter, Events]:
     if not encounter.active:
         return encounter, []

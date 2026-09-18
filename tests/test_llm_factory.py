@@ -25,7 +25,7 @@ from src.models.llm import (
     resolve_model,
 )
 
-AGENT_TYPES = ["supervisor", "researcher", "dice_roller", "dungeon_master"]
+AGENT_TYPES = ["researcher", "dungeon_master"]
 
 
 @pytest.fixture(autouse=True)
@@ -58,21 +58,21 @@ def test_every_configured_tag_is_lowercase_and_sized(model):
 
 
 def test_agent_specific_env_var_wins(monkeypatch):
-    monkeypatch.setenv("DND_MODEL_SUPERVISOR", "phi4:latest")
-    assert resolve_model("supervisor") == "phi4:latest"
+    monkeypatch.setenv("DND_MODEL_DUNGEON_MASTER", "phi4:latest")
+    assert resolve_model("dungeon_master") == "phi4:latest"
     assert resolve_model("researcher") == AGENT_MODELS["researcher"]
 
 
 def test_default_env_var_covers_every_unoverridden_role(monkeypatch):
     monkeypatch.setenv("DND_MODEL_DEFAULT", "phi4:latest")
     monkeypatch.setenv("DND_MODEL_RESEARCHER", "qwen2.5:14b")
-    assert resolve_model("supervisor") == "phi4:latest"
+    assert resolve_model("dungeon_master") == "phi4:latest"
     assert resolve_model("researcher") == "qwen2.5:14b"
 
 
 def test_blank_env_var_is_ignored(monkeypatch):
-    monkeypatch.setenv("DND_MODEL_SUPERVISOR", "   ")
-    assert resolve_model("supervisor") == AGENT_MODELS["supervisor"]
+    monkeypatch.setenv("DND_MODEL_DUNGEON_MASTER", "   ")
+    assert resolve_model("dungeon_master") == AGENT_MODELS["dungeon_master"]
 
 
 # --- host resolution --------------------------------------------------------
@@ -100,14 +100,14 @@ def test_host_is_normalised_to_a_url(monkeypatch, value, expected):
 def test_create_llm_makes_no_network_call(monkeypatch):
     """The graph builds all four agents before any daemon is required."""
     monkeypatch.setenv("OLLAMA_HOST", "http://127.0.0.1:1")  # nothing listens here
-    llm = create_llm("supervisor")
+    llm = create_llm("dungeon_master")
     assert isinstance(llm, OllamaChat)
-    assert llm.model == AGENT_MODELS["supervisor"]
+    assert llm.model == AGENT_MODELS["dungeon_master"]
     assert llm.base_url == "http://127.0.0.1:1"
 
 
 def test_explicit_model_overrides_the_map():
-    assert create_llm("supervisor", model="phi4:latest").model == "phi4:latest"
+    assert create_llm("dungeon_master", model="phi4:latest").model == "phi4:latest"
 
 
 def test_temperature_is_still_supported():
@@ -139,7 +139,7 @@ def test_unrelated_errors_are_left_alone():
 
 def test_invoke_translates_a_connection_failure(monkeypatch):
     monkeypatch.setenv("OLLAMA_HOST", "http://127.0.0.1:1")
-    llm = create_llm("supervisor")
+    llm = create_llm("dungeon_master")
 
     def boom(*args, **kwargs):
         raise ConnectionError("[Errno 61] Connection refused")
@@ -152,7 +152,7 @@ def test_invoke_translates_a_connection_failure(monkeypatch):
 
 
 def test_invoke_passes_other_errors_through(monkeypatch):
-    llm = create_llm("supervisor")
+    llm = create_llm("dungeon_master")
 
     def boom(*args, **kwargs):
         raise ValueError("bad prompt template")

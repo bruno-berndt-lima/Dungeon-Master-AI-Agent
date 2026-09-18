@@ -27,7 +27,8 @@ class GameState(TypedDict):
        Every other field replaces on write.
 
     2. Routing lives in ``Command(goto=...)``, not in the state. There is no
-       ``next_agent`` field (PR-03).
+       ``next_agent`` field (PR-03), and since PR-18 no ``active_agent``
+       either — ``intake`` decides where a turn goes, in code.
 
     ``party``, ``encounter`` and ``pending`` hold the engine's models as JSON
     dicts — see the module docstring and the accessors below.
@@ -35,8 +36,7 @@ class GameState(TypedDict):
 
     messages: Annotated[Sequence[BaseMessage], add_messages]
     current_task: str
-    active_agent: str
-    game_state: Dict[str, Any]  # narrator-extracted world facts; PR-18 retires it
+    tool_steps: int  # tool calls made this turn; the DM's loop is capped (PR-18)
     party: Dict[str, Dict[str, Any]]  # character name -> Character (JSON)
     encounter: Optional[Dict[str, Any]]  # Encounter (JSON) while a fight is on
     pending: Optional[Dict[str, Any]]  # PendingCheck (JSON) while a roll is awaited
@@ -45,16 +45,11 @@ class GameState(TypedDict):
 
 
 def create_default_game_state() -> GameState:
-    """Creates a default game state with initial values.
-
-    ``game_state`` is a dict and must stay one — it is merged into by the
-    narrator's scene extraction.
-    """
+    """Creates a default game state with initial values."""
     return GameState(
         messages=[],
         current_task="",
-        active_agent="supervisor",
-        game_state={},
+        tool_steps=0,
         party={},
         encounter=None,
         pending=None,

@@ -30,7 +30,7 @@ class CampaignSummary:
     thread_id: str
     last_active: str  # ISO 8601, from the newest checkpoint
     turns: int  # player messages so far
-    location: str  # `game_state["location"]`, or ""
+    party: List[str]  # character names
     last_prompt: str  # the player's most recent input, or ""
 
 
@@ -48,12 +48,12 @@ def _last_of(messages: Iterable, kind, name: Optional[str] = None) -> str:
 def summarize(thread_id: str, values: Dict[str, Any], last_active: str = "") -> CampaignSummary:
     """A summary from a thread's latest state values."""
     messages = list(values.get("messages") or [])
-    world = values.get("game_state") or {}
+    party = values.get("party") or {}
     return CampaignSummary(
         thread_id=thread_id,
         last_active=last_active,
         turns=sum(isinstance(m, HumanMessage) for m in messages),
-        location=str(world.get("location") or "") if isinstance(world, dict) else "",
+        party=[str(c.get("name", key)) for key, c in party.items()] if isinstance(party, dict) else [],
         last_prompt=_last_of(messages, HumanMessage),
     )
 
@@ -105,8 +105,8 @@ def recap(values: Dict[str, Any]) -> str:
     lines = []
     if summary.turns:
         lines.append(f"{summary.turns} turn{'s' if summary.turns != 1 else ''} so far.")
-    if summary.location:
-        lines.append(f"Location: {summary.location}.")
+    if summary.party:
+        lines.append(f"Party: {', '.join(summary.party)}.")
     narration = _last_of(values.get("messages"), AIMessage, name="dungeon_master")
     if narration:
         lines.append(f"Last from the DM: {narration.strip()}")

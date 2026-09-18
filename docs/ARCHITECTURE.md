@@ -3,91 +3,76 @@
 ## Shape of the system
 
 ```
-                    main.py  (REPL)
-                       │  state dict
+                    main.py  (REPL)  /  bot.py (Discord, PR-22)
+                       │  {messages: [HumanMessage], current_task}
                        ▼
           ┌────────────────────────────┐
           │  StateGraph(GameState)     │
-          │  entry point: supervisor   │
+          │  entry point: intake       │
           └────────────┬───────────────┘
                        ▼
-                 ┌───────────┐
-                 │ supervisor│──── FINISH / unroutable ──▶ END
-                 └─────┬─────┘
-        ┌──────────────┼──────────────┐
-   goto │         goto │         goto │
-        ▼              ▼              ▼
-  ┌───────────┐  ┌──────────┐  ┌─────────────┐
-  │ researcher│  │dungeon_  │  │ dice_roller │
-  │           │  │ master   │  │             │
-  └─────┬─────┘  └────┬─────┘  └──────┬──────┘
-        │ goto=       │ goto=         │ goto="__end__"
-        │ "__end__"   │ "__end__"     │   uses src/utils/dice.py
-        ▼             ▼               ▼
-       END           END             END
-
-  researcher ──▶ scored retrieval ──▶ [rewrite+retry on a miss] ──▶ ChatOllama
-  supervisor ──▶ prefilter_route() ──▶ or ──▶ with_structured_output(Router)
-  dungeon_master ──▶ narrate (streams) ──▶ extract scene ──▶ game_state
+                  ┌─────────┐   /rules q      ┌────────────┐
+                  │ intake  │────────────────▶│ researcher │──▶ END
+                  │ (code)  │   /roll /join   └────────────┘
+                  └────┬────┘   /party, dice ─────────────────▶ END
+                       │ play
+                       ▼
+              ┌────────────────┐  tool calls   ┌─────────┐
+              │ dungeon_master │──────────────▶│  tools  │
+              │  (model+tools) │◀──────────────│ (engine)│
+              └───────┬────────┘  ToolMessages └─────────┘
+                      │ narration                 ≤ 4 round trips per turn
+                      ▼
+                     END
 ```
 
-**Every worker terminates the turn.** Nothing routes back into the supervisor, so
-a turn runs exactly one routing decision and one worker.
-
-There are **no `add_edge` calls**. `create_game_graph()` registers four nodes and
-sets `supervisor` as the entry point; all traversal is driven by each node returning
-a `langgraph.types.Command(goto=..., update=...)`. LangGraph derives the legal
-destinations from the return type annotation on `process_task`.
+There are **no `add_edge` calls** and **no model-driven routing**. `intake`
+is a function that returns `Command(goto=...)`; the DM and `tools` hand the
+turn back and forth by `Command` until the model narrates. LangGraph derives
+the legal destinations from each node's return annotation.
 
 ## A turn, end to end
 
-1. **`main.py`** opens a SQLite checkpointer, compiles the graph against it, and
-   mints a `thread_id` for the session.
+1. **`main.py`** opens the SQLite checkpointer, compiles the graph against it,
+   and picks a `thread_id` (`--thread`, or a fresh one).
 
-2. User input becomes a `HumanMessage`. The first turn seeds the full default
-   state; every later turn passes only `{"messages": [...], "current_task": ...}`
-   and lets the checkpointer supply the rest.
+2. User input becomes a `HumanMessage`. The first turn of a new thread seeds
+   the default state; every later turn passes only `{"messages": [...],
+   "current_task": ...}` and the checkpointer supplies the rest
+   (`src/graph/campaigns.py`).
 
-3. `game_graph.stream(turn, config=config, stream_mode="messages")` enters the
-   `supervisor` node. `main.py` streams rather than invokes so narration appears
-   token by token — see "Streaming" below.
+3. `game_graph.stream(turn, config=config, stream_mode="messages")` enters
+   **`intake`** (`src/graph/intake.py`). In code, no model:
+   - `/rules <q>` → `researcher`, with the bare question in `current_task`.
+   - `/roll [n]` with a roll pending → `resolve_check` against the sheet, the
+     result posted as an `intake` message, then → `dungeon_master` to narrate
+     the outcome. With nothing pending, `/roll 2d6+3` rolls dice → END.
+   - `/join`, `/party`, `/help`, and a bare dice request (`roll 1d20+5`) → END.
+   - Anything else is play → `dungeon_master`, `tool_steps` reset to 0.
 
-4. **`GameSupervisor.process_task`** routes in two stages.
+4. **`dungeon_master`** (`DungeonMaster.process_task`) builds the prompt —
+   `DUNGEON_MASTER_PROMPT` + *the table right now* (`get_scene`) + the last
+   six narrative messages + this turn's tool exchange — and calls the model
+   with the tools bound. If the reply carries tool calls → `tools`; otherwise
+   it is the narration and the turn ends. While a roll is pending, or once
+   `MAX_TOOL_STEPS` (4) is spent, the model is called *without* tools and
+   told to narrate what it has. See `docs/DM.md`.
 
-   First `prefilter_route()` — a pure function, no model. If the request is
-   unambiguously dice (`"roll 2d10 + 1d6"`, or bare notation like `"2d6+1d8"`)
-   it returns `dice_roller` immediately. It is deliberately conservative: a
-   question opener, or notation used descriptively (`"my sword does 2d6"`),
-   returns `None` and falls through.
+5. **`tools`** (`DungeonMaster.run_tools`) runs each call through
+   `run_tool` (`docs/TOOLS.md`) — which never raises — writes the `party` /
+   `encounter` / `pending` deltas, and returns a `ToolMessage` per call.
+   Back to step 4.
 
-   Otherwise `SUPERVISOR_PROMPT` plus **the current request** — not the message
-   tail — goes to `with_structured_output(Router, method="json_schema")`. `next`
-   is a `Literal`, so the model cannot name a node that does not exist. It returns
-   `Command(goto=<agent>, update={"active_agent": goto})`. Warm cost on the target
-   machine: **~2.7 s** on `qwen2.5:7b` (`docs/KNOWN_ISSUES.md` #24, #25).
+6. **`researcher`** — RAG: `question → scored retrieval → (rewrite + retry on
+   a miss) → labelled passages → prompt → model → answer + sources`. Streams,
+   returns `Command(goto="__end__")` with one new `AIMessage`.
 
-   There is **no fallback destination**. An unroutable turn ends with an explicit
-   message; it does not become a `researcher` query.
+7. Every model call and every tool call writes a line to
+   `logs/llm_interactions/llm_log_<YYYY-MM-DD>.jsonl` with `stage` = `plan`,
+   `tool`, or `narrate`.
 
-5. The chosen node runs:
-
-   - **`researcher`** — RAG. `question → scored retrieval → (rewrite + retry if
-     the score misses) → labelled passages → prompt → LLM → answer + sources`.
-     Streams, and returns `Command(goto="__end__")` with one new `AIMessage`.
-   - **`dice_roller`** — reads the dice expression out of the request with a
-     regex, rolls with the pure `DiceRoller` utility, returns
-     `Command(goto="__end__")` with one new `AIMessage`. No LLM call unless the
-     request names no dice. It used to return to the supervisor; see below.
-   - **`dungeon_master`** — narrates the world's response, streaming as it goes,
-     then makes a second structured call to lift durable facts (location,
-     inventory, effects) into `game_state`. Returns `Command(goto="__end__")`.
-
-6. Every agent call writes one line to `logs/llm_interactions/llm_log_<YYYY-MM-DD>.jsonl`
-   with `timestamp`, `agent`, `query`, `response`, `metadata`.
-
-7. Back in `main.py`, anything already printed live is skipped and the rest of
-   this turn's messages are rendered whole. The loop continues until the user
-   types `quit` or `exit` — no agent can end the session on their behalf.
+8. Back in `main.py`, streamed prose is not reprinted; other new messages are
+   rendered; tool traffic is hidden unless `DND_SHOW_TOOLS=1`.
 
 ## Streaming
 
@@ -104,10 +89,11 @@ building it:
   narration prints twice.
 - **`langgraph_node in STREAMING_NODES`** — the supervisor's routing call and the
   dice parse emit tokens too. Neither is for the player.
-- **`"internal" not in tags`** — a single node can make several calls. The DM
-  narrates and then extracts world state as JSON; both carry the same node name,
-  so the second is tagged at the call site. Without this the player sees raw JSON
-  spliced onto the end of the story.
+- **`"internal" not in tags`** — a single node can make several calls. The
+  researcher rewrites a query before answering; both carry the same node name,
+  so the internal one is tagged at the call site.
+- **no `tool_call_chunks`** — the DM's tool-choosing reply streams too, as
+  chunks of a JSON tool call with no content. They are not prose.
 
 Measured on the target machine: first token ~3.6 s, against ~40 s to wait for a
 finished narration. The researcher streams too since PR-08.
@@ -118,25 +104,21 @@ streamed text and the stored message therefore differ, so `main.py` prints the
 unstreamed tail rather than skipping the message entirely. Without that the
 citations never reached the player.
 
-**The `dice_roller → supervisor` return edge is gone (PR-04).** It used to mean a
-dice request took two supervisor turns, and the 2025-03-31 log shows what that
-cost: after the roll, the supervisor saw the roll *result* as the newest message
-and routed it to `researcher`, which spent ~40 s answering a question nobody
-asked. Two changes close it — `dice_roller` terminates directly, and the
-supervisor routes on `current_task` rather than the tail, so an agent's own
-output can never become the thing being routed. A dice request now measures
-**4.9 s** end to end instead of ~45 s.
+**Every worker terminates the turn** — the DM after its narration, the
+researcher after its answer, `intake` directly for commands. Nothing routes
+back into a router, because there is no router: PR-04 removed the
+`dice_roller → supervisor` edge that once cost ~40 s of unwanted generation
+per dice roll, and PR-18 removed the supervisor itself.
 
 ## State
 
-`src/graph/game_state.py` declares `GameState(TypedDict)` with nine keys:
+`src/graph/game_state.py` declares `GameState(TypedDict)` with eight keys:
 
 | Key | Type | Holds |
 |---|---|---|
 | `messages` | `Annotated[Sequence[BaseMessage], add_messages]` | full conversation |
 | `current_task` | `str` | latest user input |
-| `active_agent` | `str` | set by the supervisor on each route |
-| `game_state` | `Dict[str, Any]` | narrator-extracted world facts (`location`, `inventory`, `effects`); retired by PR-18 |
+| `tool_steps` | `int` | tool round trips so far this turn; capped at 4 (PR-18) |
 | `party` | `Dict[str, dict]` | character name → `Character` as JSON (PR-16) |
 | `encounter` | `dict \| None` | the `Encounter` as JSON while a fight is on (PR-16) |
 | `pending` | `dict \| None` | a `PendingCheck` as JSON while the DM waits on a roll (PR-16) |
@@ -198,21 +180,18 @@ which tolerates both dict-shaped and `BaseMessage`-shaped history and falls back
 `current_task`. Abstract methods: `process_task`, `get_definition`.
 
 **`src/models/llm.py`** — the single provider boundary. `create_llm(agent_type)`
-resolves a model per role from `AGENT_MODELS` (`llama3.2:3b` for `supervisor` and
-`dice_roller`, `qwen2.5:7b` for `researcher` and `dungeon_master`), overridable by
+resolves a model per role from `AGENT_MODELS` (`qwen2.5:7b` for both `researcher` and
+`dungeon_master`), overridable by
 `DND_MODEL_<AGENT_TYPE>` or `DND_MODEL_DEFAULT`, against the host in `OLLAMA_HOST`.
 It returns an `OllamaChat` — a `ChatOllama` subclass that translates the two
 failures this project hits constantly, a dead daemon and an unpulled model, into
 messages that name the host and the `ollama pull` command. Construction makes no
 network call, so the graph (and the test suite) build offline. Every agent
-instantiates its own client in `__init__`, so a four-agent graph opens four
-clients; the daemon keeps both models resident, so this costs nothing here.
+instantiates its own client in `__init__`.
 
-**`src/prompts/prompts.py`** — four constants: `DUNGEON_MASTER_PROMPT`,
-`RESEARCHER_PROMPT`, `SUPERVISOR_PROMPT`, `DICE_ROLLER_PROMPT`. The supervisor prompt
-is a strict "return only the agent name" instruction; the dice roller prompt describes
-rolling behavior the agent doesn't actually delegate to the LLM (the LLM only parses;
-`DiceRoller` rolls).
+**`src/prompts/prompts.py`** — three constants: `DUNGEON_MASTER_PROMPT` (the
+tool contract and the voice), `NARRATE_ONLY_NOTE` (appended when tools are
+withheld), `RESEARCHER_PROMPT`.
 
 **`src/utils/dice.py`** — the cleanest module in the repo. `parse_dice_string`
 splits on signed terms and yields `(quantity, sides)` tuples, skipping flat
@@ -240,6 +219,5 @@ which requires network access at construction time.
 
 The JSONL logs under `logs/llm_interactions/` are the only instrumentation, and they
 are genuinely useful — 521 lines across four days, capturing the exact prompt sent
-and reply received per agent, including the supervisor's routing decisions. When
-debugging routing, read `llm_log_2025-03-31.jsonl`: it shows the full
-supervisor → dice_roller → supervisor → researcher sequence for a single `roll 2d10 + 1d6`.
+and reply received per agent, with a `stage` per line since PR-18 (`plan`, `tool`, `narrate`).
+`llm_log_2025-03-31.jsonl` is kept as the evidence for KNOWN_ISSUES #6.

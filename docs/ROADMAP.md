@@ -317,7 +317,7 @@ arguments with pydantic and returns an explanation instead of raising
 Acceptance: every tool has an offline test with a fake state; no tool calls a
 model; a bad argument never propagates an exception.
 
-**PR-18 — New graph, no supervisor (L)**
+**PR-18 — New graph, no supervisor (L)** — *landed 2026-09-18. One deviation: no `interrupt()` — a pending roll is a state field and the player's `/roll` is a new turn, which holds no thread open (see `docs/DM.md`). A minimal `/join` came forward from PR-21 so the REPL is playable.*
 `refactor/dm-tool-loop`. The pivot.
 - `intake` node — pure code. Classifies the incoming event: slash command
   (already resolved by the bot/REPL), `RollResult`, or play text. Routes

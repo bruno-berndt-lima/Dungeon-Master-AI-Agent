@@ -3,13 +3,10 @@
 Every agent gets its client from `create_llm(agent_type)`. Change the model, the
 host, or the provider here — never in an agent.
 
-Models are resolved per agent role, because the roles have different needs: the
-supervisor runs on every turn and only classifies, so latency dominates; the
-narrative agents are read by a human, so quality shows. Both are overridable by
-environment variable, so a different machine can pick different models without
-touching this file:
+Models are resolved per agent role and overridable by environment variable, so
+a different machine can pick different models without touching this file:
 
-    DND_MODEL_SUPERVISOR=qwen2.5:7b   # one role
+    DND_MODEL_DUNGEON_MASTER=qwen3:8b  # one role
     DND_MODEL_DEFAULT=llama3.2:3b     # every role that has no specific override
     OLLAMA_HOST=http://box.local:11434
 """
@@ -27,16 +24,11 @@ from langchain_ollama import ChatOllama, OllamaEmbeddings
 DEFAULT_MODEL = "llama3.2:3b"
 
 AGENT_MODELS = {
-    # Routing looks like the cheapest job here, and PR-02 put the 3B on it for
-    # that reason. Measured in PR-04, that was wrong: on a 12-case routing set
-    # llama3.2:3b scored 7/12 and qwen2.5:7b scored 12/12. A routing decision is
-    # ~10 output tokens, so the bigger model costs about 1 s more — against a
-    # misroute costing ~40 s of unwanted generation, or silence when it lands on
-    # an unimplemented agent. Accuracy dominates, not latency.
-    "supervisor": "qwen2.5:7b",       # every turn; must be right more than fast
-    "dice_roller": "llama3.2:3b",     # extraction into a fixed schema
+    # Two roles since PR-18: the LLM router and the LLM dice parser are gone — `intake` routes in code and the engine rolls.
+    # The DM now chooses tools as well as narrating, so PR-20 measures
+    # candidates on tool-call accuracy before this default moves.
     "researcher": "qwen2.5:7b",       # grounded answers over retrieved text
-    "dungeon_master": "qwen2.5:7b",   # narrative coherence
+    "dungeon_master": "qwen2.5:7b",   # narration and tool choice
 }
 
 DEFAULT_HOST = "http://localhost:11434"

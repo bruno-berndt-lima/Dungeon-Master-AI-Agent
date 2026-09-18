@@ -170,6 +170,8 @@ Rules applied, each pinned by a test in `tests/test_engine_combat.py`:
   reaction or a DM override), against a living target, by a creature that
   can act; a natural 1 misses, a natural 20 crits, otherwise total ≥ AC.
   Every damage component is rolled and applied in turn, dice doubled on a crit.
+- **`move_first`** puts the combatant who opened the fight at the top of the
+  order — a declared attack on an unsuspecting creature lands first.
 - **The fight ends** in `victory` when every monster is dead, `defeat` when
   every character is dead or at 0 HP, or by `end_encounter(enc, "fled")`.
 - **A short rest** spends hit dice for d(hit die) + CON each (never below 0);
