@@ -23,6 +23,10 @@
               └───────┬────────┘  ToolMessages └─────────┘
                       │ narration                 ≤ 4 round trips per turn
                       ▼
+              ┌────────────────┐
+              │     memory     │  folds old messages into the journal
+              └───────┬────────┘  when the transcript passes 24 (one internal call)
+                      ▼
                      END
 ```
 
@@ -63,15 +67,20 @@ the legal destinations from each node's return annotation.
    `encounter` / `pending` deltas, and returns a `ToolMessage` per call.
    Back to step 4.
 
-6. **`researcher`** — RAG: `question → scored retrieval → (rewrite + retry on
+6. **`memory`** (`Memory.process_task`) runs after every narration. Past
+   `MAX_MESSAGES` it folds the oldest messages into `summary` with one
+   internal model call and removes them (`RemoveMessage`); otherwise it does
+   nothing. See `docs/DM.md`, "Memory".
+
+7. **`researcher`** — RAG: `question → scored retrieval → (rewrite + retry on
    a miss) → labelled passages → prompt → model → answer + sources`. Streams,
    returns `Command(goto="__end__")` with one new `AIMessage`.
 
-7. Every model call and every tool call writes a line to
+8. Every model call and every tool call writes a line to
    `logs/llm_interactions/llm_log_<YYYY-MM-DD>.jsonl` with `stage` = `plan`,
-   `tool`, or `narrate`.
+   `tool`, `narrate`, or `fold`.
 
-8. Back in `main.py`, streamed prose is not reprinted; other new messages are
+9. Back in `main.py`, streamed prose is not reprinted; other new messages are
    rendered; tool traffic is hidden unless `DND_SHOW_TOOLS=1`.
 
 ## Streaming
@@ -122,7 +131,7 @@ per dice roll, and PR-18 removed the supervisor itself.
 | `party` | `Dict[str, dict]` | character name → `Character` as JSON (PR-16) |
 | `encounter` | `dict \| None` | the `Encounter` as JSON while a fight is on (PR-16) |
 | `pending` | `dict \| None` | a `PendingCheck` as JSON while the DM waits on a roll (PR-16) |
-| `summary` | `str` | rolling campaign summary (PR-19) |
+| `summary` | `str` | the campaign journal, kept by `memory` (PR-19) |
 | `last_response` | `str` | latest agent output |
 
 The engine's models are stored as **plain JSON dicts**, never as pydantic

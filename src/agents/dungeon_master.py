@@ -80,8 +80,11 @@ class DungeonMaster(BaseAgent):
 
     # --- prompt assembly --------------------------------------------------------
 
-    def _system_prompt(self, state: GameState, narrate_only_reason: Optional[str]) -> str:
-        parts = [DUNGEON_MASTER_PROMPT, "## The table right now", get_scene(state).text]
+    def _table_briefing(self, state: GameState, narrate_only_reason: Optional[str]) -> str:
+        """The dynamic part of the prompt: the scene sheet, the journal, and any
+        restriction this turn. It goes at the *end* of the prompt, not in the
+        system message — see `_messages`."""
+        parts = ["## The table right now", get_scene(state).text]
         summary = (state.get("summary") or "").strip()
         if summary:
             parts += ["## The story so far", summary]
@@ -91,6 +94,17 @@ class DungeonMaster(BaseAgent):
         return text
 
     def _messages(self, state: GameState, narrate_only_reason: Optional[str]) -> List[BaseMessage]:
+        """The prompt, ordered so the daemon's prefix cache can help.
+
+        Ollama re-evaluates a prompt from the first token that differs from
+        the previous call. The system prompt plus the bound tool schemas is
+        ~2,500 tokens and never changes, so it must come first and stay
+        byte-identical; on the Intel CPU that prefix costs ~50 s to evaluate
+        cold and ~0 s cached. The scene sheet and the journal change every
+        turn, so they go last, as a briefing message just before this turn's
+        exchange. Measured in PR-19: first token 57 s with the sheet in the
+        system prompt, 7 s with it here.
+        """
         history = list(state.get("messages") or [])
         last_human = max((i for i, m in enumerate(history) if isinstance(m, HumanMessage)), default=None)
         if last_human is None:
@@ -110,7 +124,8 @@ class DungeonMaster(BaseAgent):
             else m
             for m in current
         ]
-        return [SystemMessage(content=self._system_prompt(state, narrate_only_reason)), *recent, *current]
+        briefing = HumanMessage(content=self._table_briefing(state, narrate_only_reason), name="table")
+        return [SystemMessage(content=DUNGEON_MASTER_PROMPT), *recent, briefing, *current]
 
     def _narrate_only_reason(self, state: GameState) -> Optional[str]:
         if state.get("pending"):
@@ -121,8 +136,10 @@ class DungeonMaster(BaseAgent):
 
     # --- the two nodes -----------------------------------------------------------
 
-    def process_task(self, state: GameState) -> Command[Literal["tools", "__end__"]]:
-        """Ask the model what happens; go to `tools` if it needs them, else narrate."""
+    def process_task(self, state: GameState) -> Command[Literal["tools", "memory", "__end__"]]:
+        """Ask the model what happens; go to `tools` if it needs them, else
+        narrate and hand the turn to `memory`, which folds old messages into
+        the journal when the transcript has grown long enough."""
         reason = self._narrate_only_reason(state)
         messages = self._messages(state, reason)
         model = self.narrator if reason else self.planner
@@ -158,7 +175,7 @@ class DungeonMaster(BaseAgent):
             metadata={"stage": "narrate", "tool_steps": steps, "narrate_only": reason, "context_messages": len(messages)},
         )
         return Command(
-            goto=END,
+            goto="memory",
             update={"messages": [AIMessage(content=narration, name=self.agent_type)], "last_response": narration, "tool_steps": 0},
         )
 

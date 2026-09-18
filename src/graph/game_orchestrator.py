@@ -1,11 +1,12 @@
-"""The graph. Four nodes, no LLM router, no edges but `Command`s.
+"""The graph. Five nodes, no LLM router, no edges but `Command`s.
 
-    intake ──▶ dungeon_master ⇄ tools ──▶ END
-       ├─────▶ researcher ──────────────▶ END        (/rules)
-       └─────▶ END                                    (/roll, /join, dice, help)
+    intake ──▶ dungeon_master ⇄ tools ──▶ memory ──▶ END
+       ├─────▶ researcher ─────────────────────────▶ END        (/rules)
+       └─────▶ END                                              (/roll, /join, dice, help)
 
 `intake` decides in code where a turn goes. The Dungeon Master loops with
-`tools` at most `MAX_TOOL_STEPS` times and always ends with narration.
+`tools` at most `MAX_TOOL_STEPS` times and always ends with narration, after
+which `memory` folds old messages into the campaign journal when needed.
 """
 
 import sqlite3
@@ -16,6 +17,7 @@ from langgraph.graph import StateGraph
 from langgraph.types import Command
 
 from src.agents.dungeon_master import DungeonMaster
+from src.agents.memory import Memory
 from src.agents.researcher import ResearcherAgent
 from src.graph.game_state import GameState
 from src.graph.intake import intake
@@ -42,15 +44,17 @@ def create_game_graph(
     dm_llm: Any = None,
     researcher: Optional[ResearcherAgent] = None,
     rng: Optional[RandomSource] = None,
+    memory_llm: Any = None,
 ):
     """Build and compile the graph.
 
-    ``dm_llm`` and ``researcher`` exist so tests can drive the whole graph
-    with stubs and no daemon; ``rng`` makes every roll in a session replay.
-    Passing a ``checkpointer`` makes state persist across runs; every
-    ``invoke`` then needs ``config={"configurable": {"thread_id": ...}}``.
+    ``dm_llm``, ``memory_llm`` and ``researcher`` exist so tests can drive the
+    whole graph with stubs and no daemon; ``rng`` makes every roll in a
+    session replay. Passing a ``checkpointer`` makes state persist across
+    runs; every ``invoke`` then needs ``config={"configurable": {"thread_id": ...}}``.
     """
     dungeon_master = DungeonMaster(llm=dm_llm, rng=rng)
+    memory = Memory(llm=memory_llm)
     researcher = researcher or ResearcherAgent()
 
     def intake_node(state: GameState) -> Command[Literal["dungeon_master", "researcher", "__end__"]]:
@@ -60,6 +64,7 @@ def create_game_graph(
     workflow.add_node("intake", intake_node)
     workflow.add_node("dungeon_master", dungeon_master.process_task)
     workflow.add_node("tools", dungeon_master.run_tools)
+    workflow.add_node("memory", memory.process_task)
     workflow.add_node("researcher", researcher.process_task)
     workflow.set_entry_point("intake")
 

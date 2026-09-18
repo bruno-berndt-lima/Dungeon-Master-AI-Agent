@@ -35,7 +35,7 @@ as items close.
 | 23 | Chroma dirties the repo on read | **fixed** (PR-10) — `chroma_db/` is gitignored, so its read-churn is invisible to git |
 | 24 | Generation throughput dominates | **mitigated** — #6 removed (PR-04), narration streams (PR-06) |
 | 25 | A 3B model is not accurate enough to route | **moot** (PR-18) — no model routes any more |
-| 26 | Time-to-first-token is dominated by prompt evaluation | **mitigated** — DM (PR-06) and researcher (PR-08) both tuned |
+| 26 | Time-to-first-token is dominated by prompt evaluation | **mitigated** — DM (PR-06), researcher (PR-08); PR-19 orders the prompt so the daemon's prefix cache covers the ~2,500-token static part: 57 s → 2.5–6 s warm |
 | 27 | A local model invents dice modifiers | **fixed** (PR-05); the parse fallback is gone with PR-18 — every number is the engine's |
 | 29 | A 7B model narrates a tool's outcome before calling it | **mitigated** (PR-18) — planner prose is buffered and dropped; the latency cost is PR-20's to measure |
 | 28 | Cited page numbers are PDF pages, not printed pages | **moot on the default corpus** (PR-09) — SRD chunks cite by entry name; still applies to `chroma_db_full/` |
@@ -359,6 +359,17 @@ routing figure in #24.
 
 Not fully closed: the researcher does not stream (its RAG chain is PR-08's), and
 its first token was measured at **61.8 s** on a cold embedding model.
+
+**PR-19 re-measured this for the tool-using DM, and the picture changed.**
+The tool schemas bound to the DM add ~1,900 tokens to every prompt on top of
+the system prompt, and Ollama re-evaluates from the first token that differs
+from the previous call. With the scene sheet and journal *inside* the system
+prompt (PR-18), every turn invalidated the whole prefix: **57 s** to first
+token warm, 67 s cold. With the static system prompt first and the changing
+briefing last (PR-19), a turn whose journal changed measures **2.5 s**, one
+where a fight started **6.4 s**. Two consequences: never put anything that
+changes per turn ahead of the tool schemas, and the schema descriptions are
+now the largest static cost — PR-20 can trim and measure them.
 
 ## Suggested order of attack
 

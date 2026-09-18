@@ -25,7 +25,7 @@ from src.models.llm import (
     resolve_model,
 )
 
-AGENT_TYPES = ["researcher", "dungeon_master"]
+AGENT_TYPES = ["researcher", "dungeon_master", "memory"]
 
 
 @pytest.fixture(autouse=True)

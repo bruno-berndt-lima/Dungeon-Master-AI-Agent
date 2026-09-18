@@ -26,7 +26,7 @@ pytest.importorskip("langgraph", reason="full dependency stack not installed")
 from src.graph.game_orchestrator import create_game_graph  # noqa: E402
 from src.graph.game_state import create_default_game_state  # noqa: E402
 
-EXPECTED_NODES = {"intake", "dungeon_master", "tools", "researcher"}
+EXPECTED_NODES = {"intake", "dungeon_master", "tools", "memory", "researcher"}
 
 
 def test_graph_compiles():
@@ -84,5 +84,5 @@ def test_the_supervisor_and_dice_agents_are_gone():
     for module in ("src.agents.supervisor", "src.agents.dice_roller"):
         with pytest.raises(ModuleNotFoundError):
             importlib.import_module(module)
-    assert set(AGENT_MODELS) == {"researcher", "dungeon_master"}
+    assert set(AGENT_MODELS) == {"researcher", "dungeon_master", "memory"}
     assert not hasattr(prompts, "SUPERVISOR_PROMPT") and not hasattr(prompts, "SCENE_EXTRACTION_PROMPT")

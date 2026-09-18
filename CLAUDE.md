@@ -64,7 +64,7 @@ load of 5–11 s. See `docs/KNOWN_ISSUES.md` #24.
 | `src/config.py` | Chroma dir, PDF paths, embedding model name |
 | `src/graph/game_orchestrator.py` | Builds the `StateGraph`, registers agent nodes |
 | `src/graph/game_state.py` | `GameState` TypedDict, default factory, and the `get_party` / `put_party` style accessors that keep engine models as JSON in state |
-| `src/agents/` | `base_agent` (ABC), `dungeon_master` (the tool loop, two nodes), `researcher` |
+| `src/agents/` | `base_agent` (ABC), `dungeon_master` (the tool loop, two nodes), `memory` (the journal), `researcher` |
 | `src/graph/intake.py` | Routing in code: commands, bare dice, pending rolls, play |
 | `src/engine/` | The 5e engine, no LLM: `character` (sheets), `checks` (d20 resolution), `combatant`, `combat` (encounters), `pregens`. See `docs/ENGINE.md` |
 | `src/srd/` | The SRD JSON as data: `monster()`, `spell()`, `equipment()`, `condition()` with fuzzy names; `bestiary.summon()` |
@@ -88,6 +88,9 @@ load of 5–11 s. See `docs/KNOWN_ISSUES.md` #24.
   that map falls back to `DEFAULT_MODEL`. Change models, host, or provider in that
   one file, never in an agent. Overrides without editing code:
   `DND_MODEL_<AGENT_TYPE>`, `DND_MODEL_DEFAULT`, `DND_EMBEDDING_MODEL`, `OLLAMA_HOST`.
+- **Nothing that changes per turn goes ahead of the static system prompt.** The
+  DM's scene sheet and journal are a trailing `table` message so Ollama's prefix
+  cache covers the ~2,500-token static part (KNOWN_ISSUES #26).
 - **Prompts live in `src/prompts/prompts.py`** as `UPPER_SNAKE` constants, imported
   by name. Don't inline system prompts in agent classes.
 - **New agents subclass `BaseAgent`** and implement `process_task(state)` and

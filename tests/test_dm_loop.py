@@ -61,7 +61,7 @@ class StubResearcher:
 
 def graph(*replies, rng=None):
     stub = StubLLM(*replies)
-    return create_game_graph(dm_llm=stub, researcher=StubResearcher(), rng=rng or random.Random(0)), stub
+    return create_game_graph(dm_llm=stub, researcher=StubResearcher(), rng=rng or random.Random(0), memory_llm=StubLLM()), stub
 
 
 def seed(party=None):
@@ -75,6 +75,10 @@ def turn(text, base=None):
     base["messages"] = [HumanMessage(content=text)]
     base["current_task"] = text
     return base
+
+
+def prompt_text(messages):
+    return "\n".join(str(m.content) for m in messages)
 
 
 def narrations(values):
@@ -97,9 +101,13 @@ def test_a_turn_with_no_tool_calls_just_narrates():
 def test_the_planner_sees_the_scene_sheet_and_the_players_words():
     g, stub = graph("Fine.")
     g.invoke(turn("I look around"))
-    system = stub.prompts[0][0].content
-    assert "The table right now" in system and "Dorn (Human Fighter 1): AC 18, 13/13 HP" in system
-    assert stub.prompts[0][-1].content == "I look around"
+    prompt = stub.prompts[0]
+    assert prompt[0].content.startswith("You are the Dungeon Master")
+    assert "13/13 HP" not in prompt[0].content  # static system prompt: cacheable
+    briefing = prompt[-2]
+    assert briefing.name == "table" and "The table right now" in briefing.content
+    assert "Dorn (Human Fighter 1): AC 18, 13/13 HP" in briefing.content
+    assert prompt[-1].content == "I look around"
 
 
 def test_a_tool_call_runs_the_tool_and_the_model_sees_the_answer():
@@ -128,7 +136,8 @@ def test_tool_answers_stay_out_of_the_next_turns_context():
     prompt = stub.prompts[2]
     assert not any(isinstance(m, ToolMessage) for m in prompt)
     assert not any(getattr(m, "tool_calls", None) for m in prompt)
-    assert [m.content for m in prompt[1:]] == ["what's ahead?", "Two goblins crouch in the dark.", "I step forward"]
+    said = [m.content for m in prompt[1:] if getattr(m, "name", None) != "table"]
+    assert said == ["what's ahead?", "Two goblins crouch in the dark.", "I step forward"]
 
 
 def test_prose_that_came_with_a_tool_call_is_dropped():
@@ -155,7 +164,7 @@ def test_narrate_only_calls_are_tagged_and_planner_calls_are_not():
             return super().invoke(messages, config)
 
     stub = Tagging(tool_calls(call("request_check", player="Kara", ability="DEX", dc=10)), "Kara, roll.")
-    g = create_game_graph(dm_llm=stub, researcher=StubResearcher())
+    g = create_game_graph(dm_llm=stub, researcher=StubResearcher(), memory_llm=StubLLM())
     g.invoke(turn("Kara sneaks"))
     assert stub.configs[0] is None
     assert stub.configs[1] == {"tags": ["narration"]}
@@ -183,8 +192,8 @@ def test_the_step_cap_forces_narration():
     assert sum(1 for m in out["messages"] if isinstance(m, ToolMessage)) == MAX_TOOL_STEPS
     assert len(stub.prompts) == MAX_TOOL_STEPS + 1
     # The final call was narrate-only: the system prompt said so.
-    assert "cannot call tools" in stub.prompts[MAX_TOOL_STEPS][0].content
-    assert "cannot call tools" not in stub.prompts[0][0].content
+    assert "cannot call tools" in prompt_text(stub.prompts[MAX_TOOL_STEPS])
+    assert "cannot call tools" not in prompt_text(stub.prompts[0])
     assert narrations(out) == ["The DM, out of tools, narrates."]
 
 
@@ -210,7 +219,7 @@ def test_a_model_failure_ends_the_turn_with_a_message():
         def invoke(self, messages, config=None):
             raise RuntimeError("daemon is down")
 
-    g = create_game_graph(dm_llm=Broken(), researcher=StubResearcher())
+    g = create_game_graph(dm_llm=Broken(), researcher=StubResearcher(), memory_llm=StubLLM())
     out = g.invoke(turn("hello"))
     assert narrations(out)[0].startswith("The story falters: daemon is down")
 
@@ -226,7 +235,7 @@ def test_request_check_records_the_roll_and_the_dm_stops_to_ask():
     assert get_pending(out).dc == 13
     assert narrations(out) == ["Kara, give me a Dexterity (Stealth) check."]
     # The second call was narrate-only: tools were not offered while a roll is owed.
-    assert "a player still owes you a roll" in stub.prompts[1][0].content
+    assert "a player still owes you a roll" in prompt_text(stub.prompts[1])
 
 
 def test_the_players_roll_resolves_the_check_and_the_dm_narrates_the_outcome():
@@ -255,6 +264,8 @@ def test_a_result_resolved_by_intake_reaches_the_model_as_a_table_report():
     last = stub.prompts[0][-1]
     assert isinstance(last, HumanMessage) and last.name == "table"
     assert last.content.startswith("[Results from the table — narrate these]")
+    briefing = [m for m in stub.prompts[0] if getattr(m, "name", None) == "table" and "The table right now" in m.content]
+    assert briefing and stub.prompts[0].index(briefing[0]) < len(stub.prompts[0]) - 1  # the briefing precedes it
     assert "d20 15 + 7 = 22 vs DC 13 — success" in last.content
 
 
@@ -276,7 +287,7 @@ def test_the_goblin_fight_plays_end_to_end_through_the_graph():
     the encounter is over, however the dice fall under the seed."""
     rng = random.Random(7)
     stub = StubLLM()
-    g = create_game_graph(dm_llm=stub, researcher=StubResearcher(), rng=rng)
+    g = create_game_graph(dm_llm=stub, researcher=StubResearcher(), rng=rng, memory_llm=StubLLM("The party fought goblins."))
 
     values = turn("Two goblins! We attack.")
     stub.replies = [tool_calls(call("start_encounter", monsters=["goblin", "goblin"])), "Steel rings out."]

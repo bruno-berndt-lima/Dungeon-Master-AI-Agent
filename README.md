@@ -70,6 +70,7 @@ resolves it against their sheet and the DM narrates the outcome.
 | `intake` | Route the turn; roll bare dice; resolve pending rolls | none |
 | `dungeon_master` | Narrate, choose tools | `qwen2.5:7b` |
 | `tools` | Run the tools against the engine | none |
+| `memory` | Fold old messages into the campaign journal | `qwen2.5:7b`, only when the transcript is long |
 | `researcher` | Answer `/rules` questions from the SRD, with citations | `qwen2.5:7b` |
 
 ## The corpus
@@ -95,7 +96,7 @@ this is CPU-only. Expect an Apple Silicon or CUDA machine to be far quicker.
 |---|---|
 | Dice roll | instant (no model call) |
 | Routing | 0 s — code, since PR-18 |
-| Narration, first token | ~3.6 s, then streams |
+| Narration, first token | 2.5–6 s warm (the static prompt prefix is cached), then shown |
 | Rules answer | ~26 s |
 
 Generation throughput is the bottleneck, not the architecture: 11.4 tok/s on the
@@ -120,7 +121,7 @@ Generation throughput is the bottleneck, not the architecture: 11.4 tok/s on the
 ## Tests
 
 ```bash
-pytest                        # 606 tests
+pytest                        # 614 tests
 pytest -m "not integration"   # unit only, no dependency stack
 pytest -m slow                # includes a real embedding round-trip (needs the daemon)
 ```
