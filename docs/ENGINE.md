@@ -19,6 +19,7 @@ the rest of the rules.
 | `character.py` | `Character`, `Abilities`, `Weapon`, the `Ability` / `Skill` / `Proficiency` / `Condition` enums, the skill→ability table | PR-14 |
 | `checks.py` | `ability_check`, `saving_throw`, `attack_roll`, `roll_damage`; `RollMode` and `resolve_mode`; the frozen result types | PR-14 |
 | `pregens.py` | Six level-1 SRD characters as data, `pregen()` to hand one out, the weapon table | PR-14 |
+| `combatant.py` | `Combatant` (a creature in a fight) with `from_monster`, `Attack`, `Damage` | PR-15 |
 | `combat.py` | Initiative, turns, damage, conditions, death saves, rests | PR-16 |
 
 ## `Character`
@@ -77,6 +78,38 @@ Rules applied, each pinned by a test in `tests/test_engine_checks.py`:
 - **Damage never goes below 0.**
 - A named skill decides the ability: `ability_check(c, STR, Skill.STEALTH)` is
   still a Dexterity (Stealth) check.
+
+## Monsters: `src/srd/` and `Combatant`
+
+The vendored `corpus/srd/*.json` is read as **data** by `src/srd/`, not only
+as retrieval text: `monster("goblin")`, `spell("fireball")`,
+`equipment("longsword")`, `condition("prone")`, `magic_item("bag of
+holding")`. Lookup is exact by slug or name (case-insensitive), then fuzzy
+within two edits — `gobln` is the goblin, `ogr` is the ogre and not the orc
+(ties go to the more similar name) — and anything further away raises
+`UnknownEntry` with suggestions. A silently wrong monster is worse than a
+question.
+
+`src/srd/bestiary.py` turns a stat block into an engine `Combatant`:
+
+```python
+summon("goblin")                    # AC 15, 7 HP, Scimitar +4 for 1d6+2 slashing
+summon_group("goblin", 3)           # ids goblin-1, goblin-2, goblin-3
+summon("ogre", roll_hp=True, rng=…) # 7d10 + 7 × CON instead of the listed 59
+```
+
+`Combatant` is the monster-side counterpart of `Character`: frozen, JSON
+round-trippable, with the numbers a fight needs (AC, HP, abilities, listed
+save and skill totals, attacks with typed damage) and the text the DM narrates
+from (traits, multiattack, legendary actions, senses, languages). Every one of
+the 334 SRD monsters builds; a test proves it. Three shapes in the data that
+the loader handles on purpose:
+
+- **damage is a list** — an adult black dragon's bite is `2d10+6 piercing`
+  plus `1d8 acid`, two `Damage` components. A rider that needs a saving throw
+  (a giant spider's poison) is not a damage entry; it stays in `desc`;
+- **flat damage** — a rat's bite is `"1"`, no dice;
+- **a choice of damage types** — a djinni's scimitar; the first option is taken.
 
 ## Pregens
 

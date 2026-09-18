@@ -275,7 +275,7 @@ Acceptance: `Character.model_validate_json(c.model_dump_json()) == c`; a
 Stealth check for the pregen rogue uses DEX + proficiency; crits double dice
 and not the modifier.
 
-**PR-15 — Structured SRD access (S)**
+**PR-15 — Structured SRD access (S)** — *landed 2026-09-18; `Combatant` lives in `src/engine/combatant.py`, the lookups in `src/srd/`.*
 `feat/srd-data`. `src/srd/` reads `corpus/srd/*.json` once and exposes
 `monster(name)`, `spell(name)`, `equipment(name)`, `condition(name)`, with fuzzy
 name matching. `Combatant.from_monster(...)` builds an engine combatant from a
