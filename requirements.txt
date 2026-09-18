@@ -17,6 +17,9 @@ langchain-text-splitters==1.1.2  # was pulled in by the `langchain` meta package
 # --- model providers ---------------------------------------------------------
 langchain-ollama==1.1.0          # chat, structured output, tool binding
 
+# --- engine ------------------------------------------------------------------
+pydantic==2.13.4                 # character sheets and combat state (src/engine/); also langchain-core's
+
 # --- retrieval ---------------------------------------------------------------
 langchain-chroma==1.1.0
 chromadb==1.5.9

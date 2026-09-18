@@ -65,6 +65,7 @@ load of 5–11 s. See `docs/KNOWN_ISSUES.md` #24.
 | `src/graph/game_orchestrator.py` | Builds the `StateGraph`, registers agent nodes |
 | `src/graph/game_state.py` | `GameState` TypedDict + default factory |
 | `src/agents/` | `base_agent` (ABC), `supervisor`, `dungeon_master`, `researcher`, `dice_roller` |
+| `src/engine/` | The 5e engine, no LLM: `character` (sheets), `checks` (d20 resolution), `pregens`. See `docs/ENGINE.md` |
 | `src/actors/` | `Actor` ABC, `Player`, `NPC` — data models, not yet used by the graph |
 | `src/data/` | `srd_loader` (JSON, default), `loader` (PDF), `processing`, `vectorstore` |
 | `corpus/srd/` | The vendored SRD 5.1 corpus. **Committed** — see `corpus/README.md` |
@@ -164,6 +165,7 @@ way, so the gate stays fast and runnable offline.
 - `docs/ROADMAP.md` — **where the project is going next: engine, tool-using DM, Discord** (PR-11 onward)
 - `docs/SPECS.md` — the refactor's execution contract, PR-00 to PR-10, all landed
 - `docs/ARCHITECTURE.md` — how a turn flows through the system, module by module
+- `docs/ENGINE.md` — the deterministic 5e engine: models, rules covered, what is left out
 - `docs/AGENTS.md` — per-agent contracts, prompts, and routing behavior
 - `docs/RAG_PIPELINE.md` — retrieval, chunking, the index, and the unused CRAG parts
 - `docs/KNOWN_ISSUES.md` — verified bugs and dead code, ranked
