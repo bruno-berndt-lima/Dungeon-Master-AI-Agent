@@ -66,6 +66,7 @@ load of 5–11 s. See `docs/KNOWN_ISSUES.md` #24.
 | `src/agents/` | `base_agent` (ABC), `supervisor`, `dungeon_master`, `researcher`, `dice_roller` |
 | `src/engine/` | The 5e engine, no LLM: `character` (sheets), `checks` (d20 resolution), `combatant`, `combat` (encounters), `pregens`. See `docs/ENGINE.md` |
 | `src/srd/` | The SRD JSON as data: `monster()`, `spell()`, `equipment()`, `condition()` with fuzzy names; `bestiary.summon()` |
+| `src/tools/` | The DM's tools over the engine — one function per tool, pydantic args, `run_tool` never raises. See `docs/TOOLS.md` |
 | `src/data/` | `srd_loader` (JSON, default), `loader` (PDF), `processing`, `vectorstore` |
 | `corpus/srd/` | The vendored SRD 5.1 corpus. **Committed** — see `corpus/README.md` |
 | `scripts/ingest.py` | Rebuilds `chroma_db/` from the PDFs; `--rebuild`, `--dry-run` |
@@ -165,6 +166,7 @@ way, so the gate stays fast and runnable offline.
 - `docs/SPECS.md` — the refactor's execution contract, PR-00 to PR-10, all landed
 - `docs/ARCHITECTURE.md` — how a turn flows through the system, module by module
 - `docs/ENGINE.md` — the deterministic 5e engine: models, rules covered, what is left out
+- `docs/TOOLS.md` — the DM's tools: what each does and writes, and why `run_tool` never raises
 - `docs/AGENTS.md` — per-agent contracts, prompts, and routing behavior
 - `docs/RAG_PIPELINE.md` — retrieval, chunking, the index, and the unused CRAG parts
 - `docs/KNOWN_ISSUES.md` — verified bugs and dead code, ranked
