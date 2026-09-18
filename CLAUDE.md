@@ -159,7 +159,8 @@ way, so the gate stays fast and runnable offline.
 
 ## Further reading
 
-- `docs/SPECS.md` — **the execution contract for the refactor: one spec per PR**
+- `docs/ROADMAP.md` — **where the project is going next: engine, tool-using DM, Discord** (PR-11 onward)
+- `docs/SPECS.md` — the refactor's execution contract, PR-00 to PR-10, all landed
 - `docs/ARCHITECTURE.md` — how a turn flows through the system, module by module
 - `docs/AGENTS.md` — per-agent contracts, prompts, and routing behavior
 - `docs/RAG_PIPELINE.md` — retrieval, chunking, the index, and the unused CRAG parts

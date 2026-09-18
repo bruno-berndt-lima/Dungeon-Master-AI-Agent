@@ -6,6 +6,10 @@ Each spec below is **one branch, one PR**. Read `CLAUDE.md` and
 
 Issue numbers in `[#n]` refer to `docs/KNOWN_ISSUES.md`.
 
+> **Status (2026-09-18): every spec in this file has landed.** The next phase —
+> a deterministic 5e engine, a tool-using DM, and multiplayer over Discord — is
+> specified in **`docs/ROADMAP.md`**, which continues the PR numbering at PR-11.
+
 ---
 
 ## How we work
