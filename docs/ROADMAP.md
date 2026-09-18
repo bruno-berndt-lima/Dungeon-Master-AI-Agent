@@ -258,7 +258,7 @@ development harness through Phase 3.
 
 ### Phase 1 — The engine
 
-**PR-14 — Characters and checks (M)**
+**PR-14 — Characters and checks (M)** — *landed 2026-09-18; `docs/ENGINE.md` describes what it covers and leaves out.*
 `feat/engine-characters`. New package `src/engine/`:
 - `character.py` — pydantic `Character`: identity (`player_id`, `name`), race,
   class, level, six abilities, proficiency bonus, skill and save proficiencies,

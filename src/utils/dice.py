@@ -1,7 +1,11 @@
 import random
 import re
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import List, Optional, Tuple
+
+# Anything with `randint(a, b)`. The engine passes a seeded `random.Random`
+# (or a scripted stand-in under test) so a whole combat replays exactly.
+RandomSource = random.Random
 
 @dataclass
 class DiceRoll:
@@ -73,9 +77,16 @@ class DiceRoller:
         return result
 
     @staticmethod
-    def roll_single_type(quantity: int, dice_type: int) -> DiceRoll:
-        """Rolls a specific quantity of a single dice type"""
-        results = [random.randint(1, dice_type) for _ in range(quantity)]
+    def roll_single_type(
+        quantity: int, dice_type: int, rng: Optional[RandomSource] = None
+    ) -> DiceRoll:
+        """Rolls a specific quantity of a single dice type.
+
+        `rng` defaults to the module-level `random`; pass a `random.Random`
+        for a reproducible sequence.
+        """
+        source = rng if rng is not None else random
+        results = [source.randint(1, dice_type) for _ in range(quantity)]
         return DiceRoll(
             dice_type=dice_type,
             results=results,
@@ -83,13 +94,13 @@ class DiceRoller:
         )
 
     @staticmethod
-    def roll_multiple(dice_str: str) -> List[DiceRoll]:
+    def roll_multiple(dice_str: str, rng: Optional[RandomSource] = None) -> List[DiceRoll]:
         """
         Rolls multiple dice of different types
         Example: "2d6 + 1d8" -> [DiceRoll(2d6), DiceRoll(1d8)]
         """
         dice_combinations = DiceRoller.parse_dice_string(dice_str)
         return [
-            DiceRoller.roll_single_type(quantity, dice_type)
+            DiceRoller.roll_single_type(quantity, dice_type, rng)
             for quantity, dice_type in dice_combinations
-        ] 
+        ]
