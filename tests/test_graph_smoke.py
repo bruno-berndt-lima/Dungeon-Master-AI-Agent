@@ -43,11 +43,27 @@ def test_default_state_declares_every_field():
     """Guards the GameState contract that PR-03 will rewrite."""
     state = create_default_game_state()
     expected = {
-        "messages", "current_task", "active_agent", "game_state", "players",
-        "npcs", "current_speaker", "turn_order", "last_response",
-        "requires_player_input",
+        "messages", "current_task", "active_agent", "game_state",
+        "party", "encounter", "pending", "summary", "last_response",
     }
     assert set(state) == expected
+
+
+def test_the_never_written_fields_are_gone():
+    """KNOWN_ISSUES #16: players, npcs, current_speaker, turn_order and
+    requires_player_input were declared and never assigned. PR-16 replaced
+    them with the engine's party / encounter / pending."""
+    state = create_default_game_state()
+    for stale in ("players", "npcs", "current_speaker", "turn_order", "requires_player_input"):
+        assert stale not in state
+
+
+def test_the_actors_package_is_gone():
+    """KNOWN_ISSUES #14: src/actors was type-hint-only. The engine replaces it."""
+    import importlib
+
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("src.actors")
 
 
 def test_next_agent_is_gone():

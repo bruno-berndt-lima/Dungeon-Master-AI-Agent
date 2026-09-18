@@ -20,7 +20,7 @@ the rest of the rules.
 | `checks.py` | `ability_check`, `saving_throw`, `attack_roll`, `roll_damage`; `RollMode` and `resolve_mode`; the frozen result types | PR-14 |
 | `pregens.py` | Six level-1 SRD characters as data, `pregen()` to hand one out, the weapon table | PR-14 |
 | `combatant.py` | `Combatant` (a creature in a fight) with `from_monster`, `Attack`, `Damage` | PR-15 |
-| `combat.py` | Initiative, turns, damage, conditions, death saves, rests | PR-16 |
+| `combat.py` | `Encounter`, initiative and turns, attacks, damage and healing, conditions and their effects, death saves, rests; every function returns `Event`s | PR-16 |
 
 ## `Character`
 
@@ -111,6 +111,75 @@ the loader handles on purpose:
 - **flat damage** — a rat's bite is `"1"`, no dice;
 - **a choice of damage types** — a djinni's scimitar; the first option is taken.
 
+## Combat: `combat.py`
+
+Every function is pure: it takes frozen models and returns new ones plus a
+list of `Event`s — `kind`, a `text` the DM narrates from, and the numbers in
+`data`. Illegal actions raise `RulesError` with a sentence for the player
+("It is goblin-1's turn, not Kara's"); the engine never guesses.
+
+An `Encounter` holds every participant as a `Combatant` — party members via
+`Combatant.from_character`, monsters from the bestiary — with the initiative
+order, the round, and whose turn it is. Between fights the character *sheet*
+is the source of truth; `sync_party` writes HP, temp HP, conditions and death
+back when a fight ends.
+
+```python
+enc, events = start_encounter([dorn, kara], summon_group("goblin", 2), rng=rng)
+enc, events = attack(enc, "Kara", "goblin-1", attack_name="rapier", rng=rng)
+enc, events = end_turn(enc, rng=rng)          # skips the dead; rolls death saves for the downed
+party = sync_party(party, enc)                # when enc.active is False
+```
+
+`enc.sheet()` is the scene sheet the DM will read (PR-19):
+
+```
+Round 2 — Kara's turn.
+Order: Kara (18), goblin-1 (18), Dorn (12), goblin-2 (12)
+  Kara: AC 14, 9/9 HP
+  ✝ goblin-1 (Goblin): AC 15, 0/7 HP, dead
+  Dorn: AC 18, 8/13 HP
+  goblin-2 (Goblin): AC 15, 7/7 HP, prone
+```
+
+Rules applied, each pinned by a test in `tests/test_engine_combat.py`:
+
+- **Initiative** is d20 + DEX, highest first; ties by DEX modifier, then name.
+- **Temporary HP** absorb damage first and do not stack (the higher value stands).
+- **Resistance** halves damage rounded down, **immunity** zeroes it,
+  **vulnerability** doubles it, matched by damage type. The "from nonmagical
+  attacks" qualifier is not modelled: every attack here counts as nonmagical.
+- **A monster at 0 HP is dead.** A character drops unconscious and starts
+  death saves — unless the damage left over past 0 is at least their maximum
+  HP, which kills outright.
+- **Death saves:** 10+ succeeds, a 20 restores 1 HP, a 1 is two failures;
+  three successes stabilise, three failures kill. Damage while at 0 HP is a
+  failed save, two on a critical. A downed character's save is rolled
+  automatically as their turn comes round, and their turn is skipped.
+- **Conditions:** incapacitated / paralyzed / petrified / stunned /
+  unconscious cannot act. Blinded, poisoned, prone, restrained and frightened
+  attackers have disadvantage. Attacks against a blinded, restrained,
+  paralyzed, stunned, unconscious or petrified target have advantage; a melee
+  hit on a paralyzed or unconscious target is a critical. A prone target gives
+  melee advantage and ranged disadvantage. Invisible attackers have
+  advantage; invisible targets impose disadvantage. Poisoned and frightened
+  give disadvantage on checks; restrained gives disadvantage on DEX saves;
+  paralyzed, stunned, unconscious and petrified fail STR and DEX saves
+  outright (`save_mode` returns `None`). Condition immunities are honoured.
+- **Attacks** happen on the attacker's turn (`enforce_turn=False` for a
+  reaction or a DM override), against a living target, by a creature that
+  can act; a natural 1 misses, a natural 20 crits, otherwise total ≥ AC.
+  Every damage component is rolled and applied in turn, dice doubled on a crit.
+- **The fight ends** in `victory` when every monster is dead, `defeat` when
+  every character is dead or at 0 HP, or by `end_encounter(enc, "fled")`.
+- **A short rest** spends hit dice for d(hit die) + CON each (never below 0);
+  **a long rest** restores all HP, half the hit dice (at least one), and
+  clears temporary HP.
+
+A scripted goblin fight (fighter and rogue against two goblins) runs to
+completion under `random.Random(7)` and replays identically; twenty seeds are
+checked to end lawfully.
+
 ## Pregens
 
 Six SRD-only level-1 characters built from the standard array plus racial
@@ -136,5 +205,8 @@ owned by that player. The templates are never handed out by reference.
   the DM narrates them until PR-24.
 - Class features with mechanics (Sneak Attack, Rage, Second Wind) are described
   in `notes`; PR-16 or PR-24 give the ones that matter in combat real tools.
-- The mechanical effects of conditions on rolls (poisoned → disadvantage, and
-  so on). The `Condition` enum exists; the effect table is PR-16's.
+- Distance and movement. "Melee" and "ranged" come from the weapon; a prone
+  target is assumed within reach of a melee attacker.
+- Reactions, opportunity attacks, bonus actions, and monsters' multiattack
+  as a rule (the text is kept; the DM calls `attack` once per attack).
+- Exhaustion, and the "nonmagical" qualifier on resistances.

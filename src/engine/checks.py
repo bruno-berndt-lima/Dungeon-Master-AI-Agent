@@ -20,7 +20,9 @@ Rules applied, per SRD 5.1:
 import random
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional, Tuple
+from typing import Literal, Optional, Tuple
+
+from pydantic import BaseModel, ConfigDict
 
 from src.engine.character import (
     ABILITY_NAMES,
@@ -216,3 +218,35 @@ def attack_roll(
         damage = roll_damage(weapon, character.damage_bonus(weapon), critical, two_handed, rng)
 
     return AttackResult(roll, weapon.name, target_ac, hit, critical, damage)
+
+
+class PendingCheck(BaseModel):
+    """A roll the Dungeon Master has asked a player for and is waiting on.
+
+    Lives in `GameState["pending"]` between the DM's request and the player's
+    `/roll` (ROADMAP §4). The DC is kept here so the player never sees it.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    player: str  # character name
+    kind: Literal["check", "save"]
+    ability: Ability
+    skill: Optional[Skill] = None
+    dc: int
+    mode: RollMode = RollMode.NORMAL
+    reason: str = ""
+
+    @property
+    def label(self) -> str:
+        ability = ABILITY_NAMES[Ability(self.ability)]
+        if self.kind == "save":
+            return f"{ability} saving throw"
+        if self.skill:
+            return f"{ability} ({Skill(self.skill).value}) check"
+        return f"{ability} check"
+
+    def resolve(self, character: Character, rng: Optional[RandomSource] = None) -> CheckResult:
+        if self.kind == "save":
+            return saving_throw(character, self.ability, self.dc, self.mode, rng)
+        return ability_check(character, self.ability, self.skill, self.dc, self.mode, rng)

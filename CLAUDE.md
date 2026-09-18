@@ -11,9 +11,8 @@ Rules retrieval is RAG over the **SRD 5.1** (CC-BY-4.0), which ships in
 All inference currently runs locally through Ollama.
 
 The project **runs**: all four agents are implemented, routing is schema-constrained,
-and narration streams. Some modules are still scaffolding that is never called
-(`src/pipelines/`, `src/actors/`). See
-`docs/KNOWN_ISSUES.md` before assuming any given path executes.
+and narration streams. The deterministic 5e engine under `src/engine/` is complete and
+tested but not yet wired into the agents (that is Phase 2 of `docs/ROADMAP.md`).
 
 ## Running it
 
@@ -63,11 +62,10 @@ load of 5–11 s. See `docs/KNOWN_ISSUES.md` #24.
 | `src/graph/campaigns.py` | Campaigns as checkpointer threads: ids, listing, recap, first-turn seeding |
 | `src/config.py` | Chroma dir, PDF paths, embedding model name |
 | `src/graph/game_orchestrator.py` | Builds the `StateGraph`, registers agent nodes |
-| `src/graph/game_state.py` | `GameState` TypedDict + default factory |
+| `src/graph/game_state.py` | `GameState` TypedDict, default factory, and the `get_party` / `put_party` style accessors that keep engine models as JSON in state |
 | `src/agents/` | `base_agent` (ABC), `supervisor`, `dungeon_master`, `researcher`, `dice_roller` |
-| `src/engine/` | The 5e engine, no LLM: `character` (sheets), `checks` (d20 resolution), `combatant` (monsters), `pregens`. See `docs/ENGINE.md` |
+| `src/engine/` | The 5e engine, no LLM: `character` (sheets), `checks` (d20 resolution), `combatant`, `combat` (encounters), `pregens`. See `docs/ENGINE.md` |
 | `src/srd/` | The SRD JSON as data: `monster()`, `spell()`, `equipment()`, `condition()` with fuzzy names; `bestiary.summon()` |
-| `src/actors/` | `Actor` ABC, `Player`, `NPC` — data models, not yet used by the graph |
 | `src/data/` | `srd_loader` (JSON, default), `loader` (PDF), `processing`, `vectorstore` |
 | `corpus/srd/` | The vendored SRD 5.1 corpus. **Committed** — see `corpus/README.md` |
 | `scripts/ingest.py` | Rebuilds `chroma_db/` from the PDFs; `--rebuild`, `--dry-run` |

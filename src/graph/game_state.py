@@ -1,57 +1,91 @@
-from typing import Annotated, Any, Dict, List, Sequence, TypedDict
+"""The graph's state, and typed access to the engine models inside it.
+
+Engine objects are stored as **plain JSON dicts**, not pydantic instances.
+LangGraph's checkpointer can serialise pydantic models, but it warns that
+unregistered types will be refused in a future release, and registering
+every engine type is a list that would rot. Dicts survive any serialiser —
+including the async saver the Discord bot needs — and the accessors below
+put the types back at the boundary: `get_party(state)` returns
+`Character`s, `put_party(...)` returns what to write.
+"""
+
+from typing import Annotated, Any, Dict, Optional, Sequence, TypedDict
 
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
 
-from src.actors.npc import NPC
-from src.actors.player import Player
+from src.engine.character import Character
+from src.engine.checks import PendingCheck
+from src.engine.combat import Encounter
 
 
 class GameState(TypedDict):
-    """Represents the current state of the game.
-
-    Two contracts worth knowing before you write a node:
+    """Two contracts worth knowing before you write a node:
 
     1. ``messages`` uses the ``add_messages`` reducer. A node returns **only the
        messages it produced**; LangGraph appends them to the existing history.
-       Returning the whole history duplicates it — the reducer appends, it does
-       not replace. Every other field replaces on write.
+       Every other field replaces on write.
 
     2. Routing lives in ``Command(goto=...)``, not in the state. There is no
-       ``next_agent`` field: it duplicated the real routing channel, the two
-       could disagree, and ``main.py`` treated ``next_agent == "FINISH"`` as a
-       signal to exit the REPL — so the session ended after every answer the
-       researcher gave.
+       ``next_agent`` field (PR-03).
+
+    ``party``, ``encounter`` and ``pending`` hold the engine's models as JSON
+    dicts — see the module docstring and the accessors below.
     """
 
     messages: Annotated[Sequence[BaseMessage], add_messages]
     current_task: str
     active_agent: str
-    game_state: Dict[str, Any]
-    players: Dict[str, Player]
-    npcs: Dict[str, NPC]
-    current_speaker: str
-    turn_order: List[str]
+    game_state: Dict[str, Any]  # narrator-extracted world facts; PR-18 retires it
+    party: Dict[str, Dict[str, Any]]  # character name -> Character (JSON)
+    encounter: Optional[Dict[str, Any]]  # Encounter (JSON) while a fight is on
+    pending: Optional[Dict[str, Any]]  # PendingCheck (JSON) while a roll is awaited
+    summary: str  # rolling campaign summary (PR-19)
     last_response: str
-    requires_player_input: bool
 
 
 def create_default_game_state() -> GameState:
     """Creates a default game state with initial values.
 
-    ``game_state`` is a dict and must stay one — ``BaseAgent.initialize_agent``
-    does a key lookup against it, which silently degrades to a substring check
-    if it is ever replaced with a string.
+    ``game_state`` is a dict and must stay one — it is merged into by the
+    narrator's scene extraction.
     """
     return GameState(
         messages=[],
         current_task="",
         active_agent="supervisor",
         game_state={},
-        players={},
-        npcs={},
-        current_speaker="",
-        turn_order=[],
+        party={},
+        encounter=None,
+        pending=None,
+        summary="",
         last_response="",
-        requires_player_input=False,
     )
+
+
+# --- typed access to the engine models -------------------------------------------
+
+def get_party(state: GameState) -> Dict[str, Character]:
+    return {name: Character.model_validate(data) for name, data in (state.get("party") or {}).items()}
+
+
+def put_party(party: Dict[str, Character]) -> Dict[str, Dict[str, Any]]:
+    return {name: character.model_dump(mode="json") for name, character in party.items()}
+
+
+def get_encounter(state: GameState) -> Optional[Encounter]:
+    data = state.get("encounter")
+    return Encounter.model_validate(data) if data else None
+
+
+def put_encounter(encounter: Optional[Encounter]) -> Optional[Dict[str, Any]]:
+    return encounter.model_dump(mode="json") if encounter else None
+
+
+def get_pending(state: GameState) -> Optional[PendingCheck]:
+    data = state.get("pending")
+    return PendingCheck.model_validate(data) if data else None
+
+
+def put_pending(pending: Optional[PendingCheck]) -> Optional[Dict[str, Any]]:
+    return pending.model_dump(mode="json") if pending else None

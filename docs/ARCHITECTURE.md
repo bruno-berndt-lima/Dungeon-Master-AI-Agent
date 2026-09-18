@@ -129,19 +129,27 @@ output can never become the thing being routed. A dice request now measures
 
 ## State
 
-`src/graph/game_state.py` declares `GameState(TypedDict)` with ten keys:
+`src/graph/game_state.py` declares `GameState(TypedDict)` with nine keys:
 
 | Key | Type | Holds |
 |---|---|---|
 | `messages` | `Annotated[Sequence[BaseMessage], add_messages]` | full conversation |
 | `current_task` | `str` | latest user input |
 | `active_agent` | `str` | set by the supervisor on each route |
-| `game_state` | `Dict[str, Any]` | world state; stays a dict. Written by `dungeon_master`: `location`, `inventory`, `effects` |
-| `players` / `npcs` | `Dict[str, Player/NPC]` | always `{}` — `src/actors/` is unused |
-| `current_speaker` | `str` | never set |
-| `turn_order` | `List[str]` | always `[]` |
+| `game_state` | `Dict[str, Any]` | narrator-extracted world facts (`location`, `inventory`, `effects`); retired by PR-18 |
+| `party` | `Dict[str, dict]` | character name → `Character` as JSON (PR-16) |
+| `encounter` | `dict \| None` | the `Encounter` as JSON while a fight is on (PR-16) |
+| `pending` | `dict \| None` | a `PendingCheck` as JSON while the DM waits on a roll (PR-16) |
+| `summary` | `str` | rolling campaign summary (PR-19) |
 | `last_response` | `str` | latest agent output |
-| `requires_player_input` | `bool` | never read |
+
+The engine's models are stored as **plain JSON dicts**, never as pydantic
+instances: LangGraph's checkpointer can serialise pydantic today but warns that
+unregistered types will be refused later, and a registration list of every
+engine type would rot. `get_party` / `put_party`, `get_encounter` /
+`put_encounter`, `get_pending` / `put_pending` convert at the boundary.
+`players`, `npcs`, `current_speaker`, `turn_order` and `requires_player_input`
+— declared in the first commit and never written — went with `src/actors/`.
 
 Two contracts to know before writing a node:
 
@@ -218,10 +226,7 @@ cannot represent: a subtracted dice term, a zero quantity or die size, junk.
 opens the day's JSONL file per write and appends. `get_recent_interactions(limit)`
 reads back only the current day's file. Each agent constructs its own `LLMLogger`.
 
-**`src/actors/`** — `Actor` ABC (`id`, `name`, `type`, `description`, `can_act()`,
-`process_message()`), plus `Player` (always can act, `process_message` returns `None`)
-and `NPC` (`NPCStats` dataclass, personality string, `process_message` is a TODO).
-Imported by `game_state.py` for type hints; never instantiated anywhere.
+**`src/engine/`**, **`src/srd/`** — the deterministic 5e engine and the SRD as data; see `docs/ENGINE.md`.
 
 **`src/data/`** — see `docs/RAG_PIPELINE.md`.
 
