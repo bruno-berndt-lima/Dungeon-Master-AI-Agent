@@ -12,8 +12,9 @@ plain function over `GameState` that returns a `ToolResult`:
 
 Arguments are pydantic models (`AttackArgs`, `RequestCheckArgs`, …) with a
 description per field. The same model validates a call **and** becomes the
-tool's schema when it is bound to the model in PR-18, so there is one source
-of truth for what a tool takes.
+tool's schema when it is bound to the model (`tool_schemas()`, with `$ref`s
+inlined and `Optional`s collapsed for a small model's benefit), so there is
+one source of truth for what a tool takes.
 
 **`run_tool(state, name, args, rng=None)` never raises.** An unknown tool, a
 bad argument, a rule the engine refuses ("It is Dorn's turn, not Kara's"), a
@@ -32,12 +33,21 @@ mistake spelled out; a traceback teaches it nothing.
 | `request_save(player, ability, dc, reason?)` | Same for a save; an automatically failed save resolves at once | `pending` |
 | `resolve_check(d20?)` | Resolves the pending roll with the player's die, or rolls for them. **Not offered to the model** — the player's `/roll` calls it | `pending` |
 | `start_encounter(monsters)` | Numbers the monsters (`goblin-1`, `goblin-2`), rolls initiative, returns the sheet | `encounter` |
-| `attack(attacker, target, attack_name?, mode?)` | One attack on the attacker's turn | `encounter`, and `party` when the fight ends |
-| `end_turn()` | Next combatant; rolls a downed character's death save on the way | `encounter` |
+| `attack(attacker, target, attack_name?, mode?)` | A player's attack. **With no fight under way it starts one against the named creature, and the attacker strikes first.** It ends the player's turn, and the monsters then act on their own until a player is up again; the text reports everything | `encounter`, and `party` when the fight ends |
+| `end_turn()` | A player ends their turn without attacking; the monsters then act on their own | `encounter` |
 | `end_encounter(outcome?)` | The party fled, the enemy yielded | `encounter` → `None`, `party` synced |
 | `apply_damage(target, amount, type?)` / `heal(target, amount)` | In a fight, on the combatant; otherwise on the sheet | `encounter` or `party` |
 | `apply_condition` / `remove_condition(target, condition)` | Same routing | `encounter` or `party` |
 | `rest(kind, player?, hit_dice?)` | Short or long rest, one character or all; refused mid-fight | `party` |
+
+**Monsters are never the model's to drive.** Measured on `qwen2.5:7b`, asked
+to call `attack` for the goblin and then `end_turn`, the model narrated the
+goblin's swing instead and invented its outcome. Monster turns are mechanical:
+after a player's turn (`attack` or `end_turn`), and right after
+`start_encounter` when a monster wins initiative, the engine takes every
+monster turn — one attack each, at a conscious character chosen with the
+game's rng — until a player is up or the fight is over. Multiattack is not
+modelled. The DM reads the whole exchange in the tool result and narrates it.
 
 When a fight ends — by the last blow, by the party going down, or by
 `end_encounter` — the tool that ended it syncs HP, temp HP, conditions and

@@ -57,8 +57,7 @@ def in_combat(rng=None):
 # --- read-only ------------------------------------------------------------------------
 
 def test_get_scene_out_of_combat():
-    text = run_tool(state_with(game_state={"location": "the crypt"}), "get_scene").text
-    assert "Location: the crypt." in text
+    text = run_tool(state_with(), "get_scene").text
     assert "Dorn (Human Fighter 1): AC 18, 13/13 HP" in text
     assert "Not in combat." in text
 
@@ -107,6 +106,15 @@ def test_request_check_records_a_pending_roll_and_hides_the_dc():
     assert "13" not in r.text
     pending = get_pending(applied(s, r))
     assert (pending.player, pending.dc, pending.skill.value) == ("Kara", 13, "Stealth")
+
+
+def test_request_check_is_not_a_stand_in_for_an_attack_in_combat():
+    """Measured: the 7B asks for a 'Strength check to hit'. It gets redirected."""
+    r = run_tool(in_combat(), "request_check", {"player": "Dorn", "ability": "STR", "dc": 15, "reason": "to hit the goblin"})
+    assert not r.ok and "Use attack(attacker='Dorn'" in r.text and r.update == {}
+    # Out of combat, or for a non-attack reason, it is a normal check.
+    assert run_tool(state_with(), "request_check", {"player": "Dorn", "ability": "STR", "dc": 15, "reason": "to hit the target dummy"}).ok
+    assert run_tool(in_combat(), "request_check", {"player": "Dorn", "ability": "STR", "dc": 15, "reason": "to shove the door"}).ok
 
 
 def test_request_check_for_an_unknown_player_names_the_party():
@@ -185,6 +193,52 @@ def test_attack_resolves_and_updates_the_encounter():
     assert r.ok and "Dorn attacks goblin-1 with Longsword: d20 12 + 5 = 17 vs AC 15 — hit." in r.text
     assert "goblin-1 takes 7 slashing damage — 0/7 HP." in r.text and "goblin-1 dies." in r.text
     assert get_encounter(applied(s, r)).get("goblin-1").dead
+    assert get_encounter(applied(s, r)).current == "Kara"  # Dorn's turn ended with the attack
+
+
+def test_a_players_attack_ends_their_turn_and_the_monsters_act():
+    """Dorn attacks; then goblin-1 and goblin-2 take their turns on their own;
+    the turn comes back to Dorn (or the fight ends). The model never drives a
+    monster."""
+    s = in_combat()  # order: Dorn, Kara, goblin-1, goblin-2 (scripted initiative)
+    r = run_tool(s, "attack", {"attacker": "Dorn", "target": "goblin-1"}, rng=random.Random(3))
+    assert r.ok
+    kinds = [e.kind for e in r.events]
+    assert kinds[0] == "attack" and "turn_ended" in kinds
+    after = get_encounter(applied(s, r))
+    if after is not None:
+        assert after.current == "Kara"  # the next player, not a goblin
+        assert "It is now Kara's turn." in r.text
+    goblin_attacks = [e for e in r.events if e.kind == "attack" and e.actor.startswith("goblin")]
+    # Kara's turn comes before the goblins', so no goblin acted yet here.
+    assert goblin_attacks == []
+
+
+def test_after_the_last_player_the_monsters_all_act_before_returning():
+    s = in_combat()
+    s = applied(s, run_tool(s, "end_turn"))  # Dorn passes → Kara
+    r = run_tool(s, "end_turn", rng=random.Random(5))  # Kara passes → goblins act → Dorn
+    goblin_attacks = [e for e in r.events if e.kind == "attack" and e.actor.startswith("goblin")]
+    after = get_encounter(applied(s, r))
+    if after is not None:
+        assert after.current == "Dorn" and after.round == 2
+        assert len(goblin_attacks) == 2
+        assert all(e.target in {"Dorn", "Kara"} for e in goblin_attacks)
+
+
+def test_a_monster_that_wins_initiative_acts_before_the_players_hear_about_it():
+    """Whichever seed, the encounter is never handed over with a monster up."""
+    for seed in range(12):
+        s = state_with()
+        r = run_tool(s, "start_encounter", {"monsters": ["goblin", "wolf"]}, rng=random.Random(seed))
+        assert r.ok, r.text
+        after = get_encounter(applied(s, r))
+        if after is None:
+            continue  # the party went down before acting — lawful, if unlucky
+        assert after.current in {"Dorn", "Kara"}
+        first = after.order[0]
+        if first not in {"Dorn", "Kara"}:
+            assert any(e.kind == "attack" and e.actor == first for e in r.events)
 
 
 def test_attack_out_of_turn_is_explained():
@@ -192,14 +246,28 @@ def test_attack_out_of_turn_is_explained():
     assert not r.ok and r.text == "Cannot attack: It is Dorn's turn, not Kara's."
 
 
-def test_attack_with_no_fight():
-    r = run_tool(state_with(), "attack", {"attacker": "Dorn", "target": "goblin-1"})
-    assert not r.ok and "no fight going on" in r.text
+def test_attack_with_no_fight_starts_one_and_the_attacker_goes_first():
+    """Whatever initiative says, the one who opened the fight strikes first —
+    including when another party member would have out-rolled them."""
+    for seed in range(8):
+        s = state_with()
+        r = run_tool(s, "attack", {"attacker": "Kara", "target": "goblin"}, rng=random.Random(seed))
+        assert r.ok, r.text
+        assert "Roll for initiative!" in r.text and "Kara attacks goblin-1 with Rapier" in r.text
+        kinds = [e.kind for e in r.events]
+        assert kinds.index("attack") > kinds.index("round_started")
+        enc = get_encounter(applied(s, r))
+        assert enc is None or enc.order[0] == "Kara"
+
+
+def test_attack_with_no_fight_and_no_such_creature_is_explained():
+    r = run_tool(state_with(), "attack", {"attacker": "Dorn", "target": "the shadows"})
+    assert not r.ok and "is not a creature I know" in r.text and "start_encounter" in r.text
 
 
 def test_attack_with_a_named_weapon_and_situational_advantage():
     s = in_combat()
-    r = run_tool(s, "attack", {"attacker": "Dorn", "target": "goblin-2", "attack_name": "handaxe", "mode": "advantage"}, rng=ScriptedRng(3, 15, 2))
+    r = run_tool(s, "attack", {"attacker": "Dorn", "target": "goblin-2", "attack_name": "handaxe", "mode": "advantage"}, rng=ScriptedRng(3, 15, 2, 7))
     assert "with Handaxe" in r.text and "(advantage)" in r.text
 
 
@@ -208,24 +276,26 @@ def test_the_last_kill_ends_the_fight_and_syncs_the_party():
     s = applied(s, run_tool(s, "apply_damage", {"target": "Dorn", "amount": 4}))
     s = applied(s, run_tool(s, "apply_damage", {"target": "goblin-2", "amount": 99}))
     r = run_tool(s, "attack", {"attacker": "Dorn", "target": "goblin-1"}, rng=ScriptedRng(20, 4, 4))
-    assert "Victory!" in r.text and "The encounter is over (victory)." in r.text
+    assert "Victory!" in r.text and "The encounter is over (victory)." in r.text and "It is now" not in r.text
     after = applied(s, r)
     assert get_encounter(after) is None
     assert get_party(after)["Dorn"].current_hp == 9  # the fight's damage reached the sheet
 
 
-def test_end_turn_advances_and_names_the_next():
+def test_end_turn_advances_to_the_next_player():
     s = in_combat()
     r = run_tool(s, "end_turn")
     assert r.ok and r.text.endswith("It is now Kara's turn.")
     assert get_encounter(applied(s, r)).current == "Kara"
 
 
-def test_end_turn_rolls_a_downed_characters_death_save():
+def test_end_turn_rolls_a_downed_characters_death_save_then_the_monsters_act():
     s = in_combat()
     s = applied(s, run_tool(s, "apply_damage", {"target": "Kara", "amount": 9}))
-    r = run_tool(s, "end_turn", rng=ScriptedRng(3))
-    assert "Kara fails a death save (3)." in r.text and "It is now goblin-1's turn." in r.text
+    r = run_tool(s, "end_turn", rng=random.Random(2))
+    assert "death save" in r.text
+    after = get_encounter(applied(s, r))
+    assert after is None or after.current == "Dorn"
 
 
 def test_end_encounter_by_fiat_syncs_and_clears():

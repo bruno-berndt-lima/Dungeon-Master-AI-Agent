@@ -16,7 +16,7 @@ pytestmark = pytest.mark.integration
 
 if sys.version_info < (3, 11):
     pytest.skip(
-        "src/agents/supervisor.py uses Literal[*ROUTING_OPTIONS] (PEP 646), "
+        "the graph modules use PEP 646 syntax, "
         "which does not parse before Python 3.11",
         allow_module_level=True,
     )
@@ -26,7 +26,7 @@ pytest.importorskip("langgraph", reason="full dependency stack not installed")
 from src.graph.game_orchestrator import create_game_graph  # noqa: E402
 from src.graph.game_state import create_default_game_state  # noqa: E402
 
-EXPECTED_NODES = {"supervisor", "dungeon_master", "researcher", "dice_roller"}
+EXPECTED_NODES = {"intake", "dungeon_master", "tools", "researcher"}
 
 
 def test_graph_compiles():
@@ -43,7 +43,7 @@ def test_default_state_declares_every_field():
     """Guards the GameState contract that PR-03 will rewrite."""
     state = create_default_game_state()
     expected = {
-        "messages", "current_task", "active_agent", "game_state",
+        "messages", "current_task", "tool_steps",
         "party", "encounter", "pending", "summary", "last_response",
     }
     assert set(state) == expected
@@ -73,9 +73,16 @@ def test_next_agent_is_gone():
     assert "next_agent" not in create_default_game_state()
 
 
-def test_default_game_state_is_a_dict():
-    """KNOWN_ISSUES #4: main.py overwrites this with the string "initialized",
-    which turns BaseAgent.initialize_agent's key lookup into a substring check.
-    PR-03 fixes the collision; this test pins the factory's side of the contract.
-    """
-    assert isinstance(create_default_game_state()["game_state"], dict)
+def test_the_supervisor_and_dice_agents_are_gone():
+    """PR-18: routing is code (`intake`), dice are the engine's. No module,
+    no prompt, no model row remains for either."""
+    import importlib
+
+    from src.models.llm import AGENT_MODELS
+    from src.prompts import prompts
+
+    for module in ("src.agents.supervisor", "src.agents.dice_roller"):
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module(module)
+    assert set(AGENT_MODELS) == {"researcher", "dungeon_master"}
+    assert not hasattr(prompts, "SUPERVISOR_PROMPT") and not hasattr(prompts, "SCENE_EXTRACTION_PROMPT")

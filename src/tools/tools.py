@@ -22,6 +22,8 @@ sentence the model can act on. The functions here raise; the dispatcher
 speaks.
 """
 
+import re
+import random
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Literal, Mapping, Optional
 
@@ -192,6 +194,7 @@ def lookup_rules(
 # --- checks the DM asks for --------------------------------------------------------------
 
 ABILITY_HELP = "One of STR, DEX, CON, INT, WIS, CHA."
+ATTACK_WORDS = re.compile(r"\b(hit|attack|attacks|strike|strikes|swing|swings|stab|stabs|shoot|shoots)\b", re.IGNORECASE)
 
 
 class RequestCheckArgs(BaseModel):
@@ -216,6 +219,12 @@ def request_check(
     character = _find_character(get_party(state), player)
     if not combat.can_act(character) and character.current_hp == 0:
         raise RulesError(combat.why_cannot_act(character))
+    # Measured on qwen2.5:7b: it reaches for a "Strength check to hit" instead
+    # of an attack roll. An attack is never a check; send it to the right tool.
+    if get_encounter(state) is not None and ATTACK_WORDS.search(reason or ""):
+        raise RulesError(
+            f"attacks are not ability checks. Use attack(attacker={character.name!r}, target=<who>) instead."
+        )
     pending = PendingCheck(
         player=character.name, kind="check", ability=Ability(ability),
         skill=Skill(skill) if skill else None, dc=dc, mode=combat.check_mode(character), reason=reason,
@@ -309,11 +318,44 @@ def start_encounter(state: State, monsters: List[str], rng: Optional[RandomSourc
         counts[entry["index"]] = counts.get(entry["index"], 0) + 1
         creatures.append(summon(name, combatant_id=f"{entry['index']}-{counts[entry['index']]}", rng=rng))
     encounter, events = combat.start_encounter(list(party.values()), creatures, rng=rng)
+    encounter, more = _monsters_act(encounter, rng)  # if a monster won initiative
+    events = events + more
+    if not encounter.active:
+        result = _after_encounter_action(state, party, encounter, events)
+        return ToolResult(text=result.text, update={**result.update, "pending": None}, events=events)
     return ToolResult(
         text=_lines(events) + "\n" + encounter.sheet(),
         update={"encounter": put_encounter(encounter), "pending": None},
         events=events,
     )
+
+
+# A turn is never handed to the model with a monster up. The model was asked
+# to call `attack` for monsters and `end_turn` after; measured on qwen2.5:7b it
+# narrated the goblin's swing instead of resolving it, then invented the
+# outcome. Monster turns are mechanical, so the engine takes them: each monster
+# attacks one conscious character (chosen with the game's rng, so a seeded
+# session replays), the turn advances, and this repeats until a character is
+# up or the fight is over. Multiattack is not modelled: one attack per turn.
+MAX_AUTOPILOT_TURNS = 50
+
+
+def _monsters_act(encounter: Encounter, rng: Optional[RandomSource]) -> tuple:
+    events: List[Event] = []
+    source = rng if rng is not None else random
+    for _ in range(MAX_AUTOPILOT_TURNS):
+        if not encounter.active or encounter.get(encounter.current).kind != "monster":
+            break
+        actor = encounter.get(encounter.current)
+        targets = [c for c in encounter.characters if not c.dead and c.current_hp > 0]
+        if targets and combat.can_act(actor) and actor.attacks:
+            target = targets[source.randint(0, len(targets) - 1)]
+            encounter, more = combat.attack(encounter, actor.id, target.id, rng=rng)
+            events.extend(more)
+        if encounter.active:
+            encounter, more = combat.end_turn(encounter, rng=rng)
+            events.extend(more)
+    return encounter, events
 
 
 def _require_encounter(state: State) -> Encounter:
@@ -339,10 +381,43 @@ def attack(
     mode: str = "normal",
     rng: Optional[RandomSource] = None,
 ) -> ToolResult:
-    """Resolve one attack on the attacker's turn."""
-    encounter = _require_encounter(state)
-    encounter, events = combat.attack(encounter, attacker, target, attack_name, RollMode(mode), rng=rng)
-    return _after_encounter_action(state, get_party(state), encounter, events)
+    """A player's attack. It ends their turn; the monsters then act until a
+    player is up again, and everything that happened is reported.
+
+    With no fight under way, the fight starts here, against the creature
+    named as the target. Measured on qwen2.5:7b: told "use start_encounter
+    first", the model narrated instead — a refusal that expects a second tool
+    call is a refusal a 7B does not recover from.
+    """
+    encounter = get_encounter(state)
+    events: List[Event] = []
+    if encounter is None:
+        party = get_party(state)
+        if not party:
+            raise RulesError("Nobody is in the party yet.")
+        try:
+            creature = summon(target, combatant_id=f"{monster(target)['index']}-1", rng=rng)
+        except Exception:
+            raise RulesError(
+                f"there is no fight going on, and {target!r} is not a creature I know. "
+                f"Use start_encounter with the monsters present."
+            ) from None
+        encounter, events = combat.start_encounter(list(party.values()), [creature], rng=rng)
+        # The declared blow opens the fight: the attacker goes first.
+        encounter, more = combat.move_first(encounter, attacker)
+        events = events + more
+        target = creature.id
+    encounter, more = combat.attack(encounter, attacker, target, attack_name, RollMode(mode), rng=rng)
+    events = events + more
+    if encounter.active and encounter.get(attacker).kind == "character":
+        encounter, more = combat.end_turn(encounter, rng=rng)
+        events = events + more
+        encounter, more = _monsters_act(encounter, rng)
+        events = events + more
+    result = _after_encounter_action(state, get_party(state), encounter, events)
+    if encounter.active:
+        return ToolResult(text=result.text + f"\nIt is now {encounter.current}'s turn.", update=result.update, events=events)
+    return result
 
 
 class EndTurnArgs(NoArgs):
@@ -350,9 +425,12 @@ class EndTurnArgs(NoArgs):
 
 
 def end_turn(state: State, rng: Optional[RandomSource] = None) -> ToolResult:
-    """Advance to the next combatant."""
+    """The current player's turn is over without an attack (they hid, dashed,
+    talked). The monsters then act until a player is up again."""
     encounter = _require_encounter(state)
     encounter, events = combat.end_turn(encounter, rng=rng)
+    encounter, more = _monsters_act(encounter, rng)
+    events = events + more
     result = _after_encounter_action(state, get_party(state), encounter, events)
     if encounter.active:
         return ToolResult(text=result.text + f"\nIt is now {encounter.current}'s turn.", update=result.update, events=events)

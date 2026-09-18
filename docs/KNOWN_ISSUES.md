@@ -34,13 +34,14 @@ as items close.
 | 22 | `create_llm` model name does not resolve | **fixed** (PR-02) |
 | 23 | Chroma dirties the repo on read | **fixed** (PR-10) — `chroma_db/` is gitignored, so its read-churn is invisible to git |
 | 24 | Generation throughput dominates | **mitigated** — #6 removed (PR-04), narration streams (PR-06) |
-| 25 | A 3B model is not accurate enough to route | **fixed** (PR-04) |
+| 25 | A 3B model is not accurate enough to route | **moot** (PR-18) — no model routes any more |
 | 26 | Time-to-first-token is dominated by prompt evaluation | **mitigated** — DM (PR-06) and researcher (PR-08) both tuned |
-| 27 | A local model invents dice modifiers | **fixed** (PR-05) |
+| 27 | A local model invents dice modifiers | **fixed** (PR-05); the parse fallback is gone with PR-18 — every number is the engine's |
+| 29 | A 7B model narrates a tool's outcome before calling it | **mitigated** (PR-18) — planner prose is buffered and dropped; the latency cost is PR-20's to measure |
 | 28 | Cited page numbers are PDF pages, not printed pages | **moot on the default corpus** (PR-09) — SRD chunks cite by entry name; still applies to `chroma_db_full/` |
 
-Seven items were found after the initial audit and are described at the bottom
-of this file: #22 through #28.
+Items found after the initial audit are described at the bottom of this file:
+#22 through #29.
 
 ## Blocking
 
@@ -426,3 +427,51 @@ passage — just offset from the printed number.
 `SRD 5.1, Monsters: Goblin` — which is what a page number was a proxy for, and
 is directly checkable. The issue still applies to `chroma_db_full/`, built from
 the PDFs.
+
+### 29. A 7B model narrates a tool's outcome before calling it
+
+Observed on `qwen2.5:7b` during PR-18's live check. Asked to attack a goblin
+in an open encounter, the model replied with prose — *"You charge forward…
+You hit the goblin with a solid blow!"* — **and** a `request_check` tool call
+in the same message. The prose assumed an outcome no tool had produced, and
+because the REPL streamed tokens as they arrived, it was on screen before the
+tool ran.
+
+**Mitigated in PR-18, at a cost.** The DM node drops the content of any reply
+that carries tool calls (it never reaches state or the next prompt), and
+`main.py` buffers the planner's tokens per model call, showing them only when
+the call ended without a tool call. Calls known in advance to be narration
+(narrate-only mode) are tagged and still stream live. The cost is that on the
+common path — a planning call that turns out to be narration — the text
+appears whole when the call ends instead of token by token: a moment on the
+M4, a pause on the Intel CPU.
+
+Two ways to get streaming back honestly, for PR-20 to measure:
+
+- **Two-phase turns.** A short planning call that may only emit tool calls
+  (or a fixed word meaning "nothing"), then a separate narration call that
+  always streams. One extra short generation per turn.
+- **A model that does not do this.** `qwen3:8b` with thinking off, or a
+  12–14B on the M4, may simply not write prose before a tool call. Count it.
+
+The same runs showed two more failures of the same kind, both closed in code:
+the model reached for a *"Strength check to hit"* instead of `attack`
+(`request_check` now refuses that during a fight and names the right tool),
+and — with the tool bound and the prompt explicit — it narrated two hits on
+the goblin **without calling `attack` at all**, leaving the goblin at 7/7 HP
+under prose that had it bleeding. A player's declared attack during a fight
+is now resolved by `intake` through the engine before the DM is called, the
+way bare dice are; and the monsters' turns run on their own after every
+player's turn, so the model is never asked to act for them. What is left to
+the model in combat is choosing when a fight starts and narrating what the
+engine reports. Whether a 7B does even that reliably is what PR-20 measures.
+
+The last live run of PR-18 shows the failure that remains: with the goblin
+dead, the encounter over, and the scene sheet saying *Not in combat*, "I swing
+my longsword at the goblin again" produced a full paragraph of the goblin
+being cut down a second time — no tool call, nothing in state, pure prose.
+Nothing in code can decide whether that sentence is a mistake, a joke, or a
+new goblin; only a model that reads the scene can, and this one did not. That
+is the bar PR-20 sets for the model choice: on a fixed set of situations,
+count the turns where the narration asserts something the engine did not
+report.

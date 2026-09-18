@@ -440,6 +440,17 @@ def test_heal_and_temp_hp_inside_an_encounter():
     assert enc.get("Dorn").current_hp == 11 and kinds(events) == ["healed"]
 
 
+def test_move_first_puts_the_opener_at_the_top():
+    from src.engine.combat import move_first
+
+    enc, _ = start_encounter([fighter(), rogue()], summon_group("goblin", 1), rng=ScriptedRng(5, 20, 10))  # Kara, goblin, Dorn
+    assert enc.order[0] == "Kara"
+    moved, events = move_first(enc, "Dorn")
+    assert moved.order == ["Dorn", "Kara", "goblin-1"] and moved.current == "Dorn"
+    assert kinds(events) == ["surprise"]
+    assert move_first(moved, "Dorn") == (moved, [])
+
+
 def test_end_encounter_by_fiat():
     enc, _ = start_encounter([fighter()], summon_group("goblin", 1), rng=ScriptedRng(20, 10))
     enc, events = end_encounter(enc, "fled")

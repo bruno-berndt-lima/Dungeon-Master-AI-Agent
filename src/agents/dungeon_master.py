@@ -1,198 +1,194 @@
-from typing import Any, Dict, List, Literal
+"""The Dungeon Master: a narrator that uses tools.
 
-from typing_extensions import TypedDict
+Two graph nodes live on this class. `process_task` ("dungeon_master") calls
+the model with the scene sheet and the tools bound; if the model asks for
+tools the turn goes to `run_tools` ("tools"), which runs them through the
+engine and comes back. The loop is capped at `MAX_TOOL_STEPS` per turn, and a
+turn always ends with narration.
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+What the model is *not* allowed to do is decide a number. It picks a tool; the
+engine answers; the narration is built from the answer. Two situations force
+narrate-only mode (no tools bound): a roll is pending — the DM asked a player
+for a check and must wait — and the tool budget is spent.
+
+Streaming, and why the planner's prose is buffered: measured on qwen2.5:7b,
+a reply that ends in a tool call sometimes *starts* with prose that assumes
+the tool's outcome ("You hit the goblin with a solid blow!" before `attack`
+ran). Text whose validity depends on how the reply ends cannot be streamed
+honestly, so `main.py` buffers the planner's tokens and shows them only if
+the reply carried no tool call; the content of a tool-call reply is dropped
+here too, so it never reaches state or the next prompt. Calls that are known
+in advance to be narration (narrate-only mode) are tagged `narration` and
+stream live. KNOWN_ISSUES #29 holds the trade-off; PR-20 measures it.
+"""
+
+from typing import Any, Dict, List, Literal, Optional
+
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.graph import END
 from langgraph.types import Command
 
 from src.agents.base_agent import BaseAgent
-from src.models.llm import create_llm
 from src.graph.game_state import GameState
-from src.prompts.prompts import DUNGEON_MASTER_PROMPT, SCENE_EXTRACTION_PROMPT
+from src.models.llm import create_llm
+from src.prompts.prompts import DUNGEON_MASTER_PROMPT, NARRATE_ONLY_NOTE
+from src.tools import run_tool, tool_schemas
+from src.tools.tools import get_scene
+from src.utils.dice import RandomSource
 
-# How many prior messages to carry into a narration — two exchanges. The
-# checkpointer keeps the whole campaign, but prompt-eval is paid on every turn
-# and CPU inference makes it the dominant cost of time-to-first-token: measured
-# ~6.6 s at a window of 8, ~3.6 s at 4, ~2.2 s at 2. Continuity does not need the
-# transcript, because the durable facts are lifted into `game_state` by the
-# extraction pass and fed back as a one-line briefing.
-CONTEXT_WINDOW = 4
+# Prior narrative messages carried into a call. Prompt-eval is the dominant cost
+# of time-to-first-token on CPU (KNOWN_ISSUES #26); the scene sheet carries the
+# state, so the transcript can stay short.
+CONTEXT_WINDOW = 6
 
-# Narration is the one place a player watches tokens arrive, and at ~4.4 tok/s a
-# runaway answer is a minute of waiting. The prompt asks for two paragraphs; this
-# is the hard stop if it does not listen.
+# Narration is the one place a player watches tokens arrive; this is the hard
+# stop if the prompt's "two paragraphs" is ignored.
 MAX_NARRATION_TOKENS = 400
 
-# Marks an LLM call whose tokens are machinery, not story. `main.py` streams by
-# node name, and a node may make several calls — this is how it tells them apart.
-INTERNAL_TAG = "internal"
+# Tool calls per turn. Enough for start_encounter → attack → end_turn → narrate;
+# a model that keeps asking for tools past this narrates what it has.
+MAX_TOOL_STEPS = 4
+
+SILENT_FALLBACK = "The Dungeon Master pauses, gathering the thread of the story. What do you do?"
+
+# Tag for a model call that is narration for certain, so the front end may
+# stream it token by token. Planner calls carry no tag and are buffered.
+NARRATION_TAG = "narration"
 
 
-class SceneUpdate(TypedDict):
-    """Durable world facts extracted from a narration."""
-    location: str
-    items_gained: List[str]
-    effects: List[str]
+def _is_narrative(message: BaseMessage) -> bool:
+    """A message the table saw: a player's words, or a reply without tool calls."""
+    if isinstance(message, HumanMessage):
+        return True
+    if isinstance(message, AIMessage):
+        return not getattr(message, "tool_calls", None)
+    return False
 
 
 class DungeonMaster(BaseAgent):
-    """Dungeon Master class that manages game interactions."""
-
-    def __init__(self):
+    def __init__(self, llm: Any = None, rng: Optional[RandomSource] = None):
         super().__init__("dungeon_master")
-        self.llm = create_llm(self.agent_type, temperature=0.8,
-                              num_predict=MAX_NARRATION_TOKENS)
-        # Separate client: the narration wants warmth, the extraction wants
-        # nothing invented. Same model, so no extra memory on the daemon — and
-        # measured, `llama3.2:3b` is no faster at this (5.2 s vs 5.0 s) while
-        # inventing `effects` out of atmosphere. Nothing to trade.
-        self.extractor = create_llm(self.agent_type).with_structured_output(
-            SceneUpdate, method="json_schema"
+        base = llm if llm is not None else create_llm(
+            self.agent_type, temperature=0.8, num_predict=MAX_NARRATION_TOKENS
         )
-        self.system_prompt = DUNGEON_MASTER_PROMPT
+        self.narrator = base
+        self.planner = base.bind_tools(tool_schemas())
+        self.rng = rng
 
     def get_definition(self) -> str:
-        return self.system_prompt
+        return DUNGEON_MASTER_PROMPT
 
-    def _scene_briefing(self, state: GameState) -> str:
-        """One line of established world state, or nothing."""
-        world = state.get("game_state") or {}
-        if not isinstance(world, dict):
-            return ""
+    # --- prompt assembly --------------------------------------------------------
 
-        parts = []
-        if world.get("location"):
-            parts.append(f"Current location: {world['location']}.")
-        if world.get("inventory"):
-            parts.append(f"The player is carrying: {', '.join(world['inventory'])}.")
-        if world.get("effects"):
-            parts.append(f"In effect: {', '.join(world['effects'])}.")
+    def _system_prompt(self, state: GameState, narrate_only_reason: Optional[str]) -> str:
+        parts = [DUNGEON_MASTER_PROMPT, "## The table right now", get_scene(state).text]
+        summary = (state.get("summary") or "").strip()
+        if summary:
+            parts += ["## The story so far", summary]
+        text = "\n\n".join(parts)
+        if narrate_only_reason:
+            text += NARRATE_ONLY_NOTE.format(reason=narrate_only_reason)
+        return text
 
-        return " ".join(parts)
-
-    def _narration_messages(self, state: GameState) -> List[BaseMessage]:
-        system = self.system_prompt
-        briefing = self._scene_briefing(state)
-        if briefing:
-            system = f"{system}\n\nEstablished so far: {briefing}"
-
-        history = [
-            message
-            for message in list(state.get("messages") or [])[-CONTEXT_WINDOW:]
-            # A dice result or a rules citation is not part of the story. Feeding
-            # them back makes the DM narrate about the mechanics.
-            if getattr(message, "name", None) in (None, self.agent_type)
+    def _messages(self, state: GameState, narrate_only_reason: Optional[str]) -> List[BaseMessage]:
+        history = list(state.get("messages") or [])
+        last_human = max((i for i, m in enumerate(history) if isinstance(m, HumanMessage)), default=None)
+        if last_human is None:
+            prior, current = history, []
+        else:
+            prior, current = history[:last_human], history[last_human:]
+        recent = [m for m in prior if _is_narrative(m)][-CONTEXT_WINDOW:]
+        # `current` is this turn: the player's message and the tool exchange so
+        # far. It is kept whole so the model sees what its tools answered.
+        # A result `intake` resolved this turn (a declared attack, a roll) is
+        # presented as a report from the table to narrate — measured, the
+        # model treats a trailing assistant message as already said and replies
+        # with a bare "What will you do?".
+        current = [
+            HumanMessage(content=f"[Results from the table — narrate these]\n{m.content}", name="table")
+            if isinstance(m, AIMessage) and getattr(m, "name", None) == "intake"
+            else m
+            for m in current
         ]
-        if not history:
-            history = [HumanMessage(content=self._get_latest_message(state))]
+        return [SystemMessage(content=self._system_prompt(state, narrate_only_reason)), *recent, *current]
 
-        return [SystemMessage(content=system), *history]
+    def _narrate_only_reason(self, state: GameState) -> Optional[str]:
+        if state.get("pending"):
+            return "a player still owes you a roll"
+        if int(state.get("tool_steps") or 0) >= MAX_TOOL_STEPS:
+            return "you have used every tool call this turn allows"
+        return None
 
-    def _extract_scene(self, narration: str) -> Dict[str, Any]:
-        """Pull durable facts out of a narration. Never raises."""
-        try:
-            update = self.extractor.invoke(
-                [
-                    SystemMessage(content=SCENE_EXTRACTION_PROMPT),
-                    HumanMessage(content=narration),
-                ],
-                # This call runs inside the same node as the narration, so a
-                # consumer streaming by node name cannot tell them apart and
-                # would print raw JSON at the player. The tag is that signal.
-                config={"tags": [INTERNAL_TAG]},
-            )
-        except Exception as exc:
-            self._log_interaction(
-                query=narration,
-                response=f"scene extraction failed: {exc}",
-                metadata={"error": str(exc), "stage": "extract"},
-            )
-            return {}
+    # --- the two nodes -----------------------------------------------------------
 
-        if not isinstance(update, dict):
-            return {}
-
-        return {
-            "location": (update.get("location") or "").strip(),
-            "items_gained": [i for i in (update.get("items_gained") or []) if i],
-            "effects": [e for e in (update.get("effects") or []) if e],
-        }
-
-    def _merged_world(self, state: GameState, scene: Dict[str, Any]) -> Dict[str, Any]:
-        """Fold a scene update into `game_state` without dropping what was there.
-
-        Returns a new dict — never mutates the graph's own state.
-        """
-        current = state.get("game_state")
-        world = dict(current) if isinstance(current, dict) else {}
-
-        if scene.get("location"):
-            world["location"] = scene["location"]
-
-        if scene.get("items_gained"):
-            inventory = list(world.get("inventory") or [])
-            for item in scene["items_gained"]:
-                if item not in inventory:
-                    inventory.append(item)
-            world["inventory"] = inventory
-
-        if scene.get("effects"):
-            effects = list(world.get("effects") or [])
-            for effect in scene["effects"]:
-                if effect not in effects:
-                    effects.append(effect)
-            world["effects"] = effects
-
-        return world
-
-    def process_task(self, state: GameState) -> Command[Literal["__end__"]]:
-        """Narrates the world's response to what the player did.
-
-        Terminates rather than returning to the supervisor. Every worker does
-        since PR-04 — handing back meant the supervisor re-routed on the agent's
-        own output (KNOWN_ISSUES #6).
-        """
-        request = self._get_latest_message(state)
-        messages = self._narration_messages(state)
+    def process_task(self, state: GameState) -> Command[Literal["tools", "__end__"]]:
+        """Ask the model what happens; go to `tools` if it needs them, else narrate."""
+        reason = self._narrate_only_reason(state)
+        messages = self._messages(state, reason)
+        model = self.narrator if reason else self.planner
+        request = str(messages[-1].content) if messages[-1:] else ""
+        steps = int(state.get("tool_steps") or 0)
 
         try:
-            # A plain `invoke`. Under `stream_mode="messages"` LangChain routes
-            # this through the streaming path anyway, so `main.py` receives
-            # tokens as they are produced — first token ~3.5 s, against ~25 s to
-            # wait for a finished narration.
-            response = self.llm.invoke(messages)
-            narration = getattr(response, "content", str(response)).strip()
-            if not narration:
-                raise ValueError("the model returned an empty narration")
+            response = model.invoke(messages, config={"tags": [NARRATION_TAG]} if reason else None)
         except Exception as exc:
-            error_message = f"The story falters: {exc}"
+            error = f"The story falters: {exc}"
+            self._log_interaction(query=request, response=error, metadata={"error": str(exc), "stage": "narrate"})
+            return Command(goto=END, update={"messages": [AIMessage(content=error, name=self.agent_type)], "last_response": error, "tool_steps": 0})
+
+        tool_calls = list(getattr(response, "tool_calls", None) or [])
+        if tool_calls and not reason:
             self._log_interaction(
                 query=request,
-                response=error_message,
-                metadata={"error": str(exc), "stage": "narrate"},
-            )
-            return Command(
-                goto=END,
-                update={
-                    "messages": [AIMessage(content=error_message, name=self.agent_type)],
-                    "last_response": error_message,
+                response=f"tool calls: {[(c['name'], c['args']) for c in tool_calls]}",
+                metadata={
+                    "stage": "plan", "tool_steps": steps + 1, "tools": [c["name"] for c in tool_calls],
+                    "discarded_prose": str(getattr(response, "content", "") or "")[:200],
                 },
             )
+            # Prose that came with a tool call assumed the tool's outcome. It
+            # is not narration and must not reach the next prompt.
+            request_only = AIMessage(content="", tool_calls=tool_calls, id=getattr(response, "id", None))
+            return Command(goto="tools", update={"messages": [request_only], "tool_steps": steps + 1})
 
-        scene = self._extract_scene(narration)
-
+        narration = str(getattr(response, "content", "") or "").strip() or SILENT_FALLBACK
         self._log_interaction(
             query=request,
             response=narration,
-            metadata={"scene": scene, "context_messages": len(messages)},
+            metadata={"stage": "narrate", "tool_steps": steps, "narrate_only": reason, "context_messages": len(messages)},
+        )
+        return Command(
+            goto=END,
+            update={"messages": [AIMessage(content=narration, name=self.agent_type)], "last_response": narration, "tool_steps": 0},
         )
 
-        update: Dict[str, Any] = {
-            "messages": [AIMessage(content=narration, name=self.agent_type)],
-            "last_response": narration,
-        }
-        if any(scene.values()):
-            update["game_state"] = self._merged_world(state, scene)
+    def run_tools(self, state: GameState) -> Command[Literal["dungeon_master"]]:
+        """Run every tool the model asked for, in order, each seeing the last's effect."""
+        history = list(state.get("messages") or [])
+        request = history[-1] if history else None
+        calls = list(getattr(request, "tool_calls", None) or [])
 
-        return Command(goto=END, update=update)
+        working: Dict[str, Any] = dict(state)
+        updates: Dict[str, Any] = {}
+        replies: List[ToolMessage] = []
+        for call in calls:
+            result = run_tool(working, call.get("name", ""), call.get("args") or {}, rng=self.rng)
+            working.update(result.update)
+            updates.update(result.update)
+            replies.append(
+                ToolMessage(
+                    content=result.text,
+                    tool_call_id=call.get("id") or call.get("name", ""),
+                    name=call.get("name", ""),
+                    additional_kwargs={"args": call.get("args") or {}, "ok": result.ok},
+                )
+            )
+            self._log_interaction(
+                query=f"{call.get('name')}({call.get('args')})",
+                response=result.text,
+                metadata={"stage": "tool", "tool": call.get("name"), "ok": result.ok, "events": [e.kind for e in result.events]},
+            )
+
+        if not replies:
+            replies.append(ToolMessage(content="No tool was named. Narrate.", tool_call_id="none", name="none"))
+        return Command(goto="dungeon_master", update={**updates, "messages": replies})

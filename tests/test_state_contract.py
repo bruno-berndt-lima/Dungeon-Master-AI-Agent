@@ -13,7 +13,7 @@ import pytest
 pytestmark = pytest.mark.integration
 
 if sys.version_info < (3, 11):
-    pytest.skip("src/agents/supervisor.py needs PEP 646 syntax", allow_module_level=True)
+    pytest.skip("the graph modules need PEP 646 syntax", allow_module_level=True)
 
 pytest.importorskip("langgraph", reason="full dependency stack not installed")
 
@@ -131,17 +131,13 @@ def test_threads_are_isolated(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# game_state stays a dict
+# every other field replaces on write
 # --------------------------------------------------------------------------- #
 
-def test_game_state_survives_a_turn_as_a_dict():
-    """KNOWN_ISSUES #4: main.py used to overwrite this with the string
-    "initialized", turning BaseAgent.initialize_agent's key lookup into a
-    substring check."""
-    graph = _one_node_graph(lambda state: {"game_state": {**state["game_state"], "seen": True}})
-    result = graph.invoke(create_default_game_state())
-    assert isinstance(result["game_state"], dict)
-    assert result["game_state"]["seen"] is True
+def test_scalar_fields_replace_rather_than_merge():
+    graph = _one_node_graph(lambda state: {"summary": "in the crypt", "tool_steps": 3})
+    result = graph.invoke({**create_default_game_state(), "summary": "on the road"})
+    assert result["summary"] == "in the crypt" and result["tool_steps"] == 3
 
 
 # --------------------------------------------------------------------------- #

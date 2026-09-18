@@ -42,8 +42,8 @@ TOOLS: Dict[str, ToolSpec] = {
         ToolSpec("request_save", "Ask a player for a saving throw against a DC you set. Do not narrate the outcome until the roll comes back.", t.RequestSaveArgs, t.request_save),
         ToolSpec("resolve_check", "Resolve the roll the DM is waiting on. Used by the player's /roll.", t.ResolveCheckArgs, t.resolve_check, for_model=False),
         ToolSpec("start_encounter", "Begin combat: roll initiative for the party and the named monsters.", t.StartEncounterArgs, t.start_encounter),
-        ToolSpec("attack", "Resolve one weapon attack on the attacker's turn: to-hit, damage, and its effect.", t.AttackArgs, t.attack),
-        ToolSpec("end_turn", "The current combatant's turn is over; advance to the next.", t.EndTurnArgs, t.end_turn),
+        ToolSpec("attack", "A player's weapon attack: to-hit, damage, and its effect. If no fight is under way it starts one against the named creature. It ends the player's turn; the monsters then act on their own and the result reports everything that happened.", t.AttackArgs, t.attack),
+        ToolSpec("end_turn", "A player ends their turn without attacking (they hid, dashed, talked). The monsters then act on their own.", t.EndTurnArgs, t.end_turn),
         ToolSpec("end_encounter", "Stop the fight without a last blow: the party fled, the enemy yielded.", t.EndEncounterArgs, t.end_encounter),
         ToolSpec("apply_damage", "Damage from something other than an attack roll: a trap, a fall, a spell effect.", t.ApplyDamageArgs, t.apply_damage),
         ToolSpec("heal", "Restore hit points to a creature.", t.HealArgs, t.heal),
@@ -56,6 +56,48 @@ TOOLS: Dict[str, ToolSpec] = {
 
 def model_tools() -> List[ToolSpec]:
     return [spec for spec in TOOLS.values() if spec.for_model]
+
+
+def _simplify(node: Any, defs: Dict[str, Any]) -> Any:
+    """Inline `$ref`s, collapse `Optional[X]` to X, drop titles.
+
+    pydantic emits `{"$ref": "#/$defs/Ability"}` and `anyOf: [X, null]`. A
+    7B model reads the tool schema as text, and the fewer indirections the
+    better it fills the arguments in.
+    """
+    if isinstance(node, list):
+        return [_simplify(item, defs) for item in node]
+    if not isinstance(node, dict):
+        return node
+    node = dict(node)
+    if "$ref" in node:
+        target = defs.get(node.pop("$ref").split("/")[-1], {})
+        node = {**target, **node}
+    if "anyOf" in node:
+        branches = [b for b in node.pop("anyOf") if b.get("type") != "null"]
+        if len(branches) == 1:
+            # The surviving branch may itself be a $ref: go round again.
+            return _simplify({**branches[0], **node}, defs)
+        node["anyOf"] = branches
+    node.pop("title", None)
+    node.pop("$defs", None)
+    return {key: _simplify(value, defs) for key, value in node.items()}
+
+
+def tool_schema(spec: ToolSpec) -> Dict[str, Any]:
+    """The OpenAI-style function definition `bind_tools` takes."""
+    raw = spec.args.model_json_schema()
+    parameters = _simplify(raw, raw.get("$defs", {}))
+    parameters.setdefault("properties", {})
+    return {
+        "type": "function",
+        "function": {"name": spec.name, "description": spec.description, "parameters": parameters},
+    }
+
+
+def tool_schemas() -> List[Dict[str, Any]]:
+    """Every tool the model is offered, as schemas."""
+    return [tool_schema(spec) for spec in model_tools()]
 
 
 def _explain_validation(name: str, error: ValidationError) -> str:

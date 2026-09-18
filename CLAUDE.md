@@ -4,13 +4,14 @@ Guidance for Claude Code when working in this repository.
 
 ## What this is
 
-An AI Dungeon Master for D&D 5e: a LangGraph multi-agent system where a supervisor
-routes player input to specialist agents (narrator, rules researcher, dice roller).
+An AI Dungeon Master for D&D 5e: a LangGraph graph where `intake` routes each turn
+in code to a tool-using Dungeon Master (narration over a deterministic 5e engine)
+or to a rules researcher.
 Rules retrieval is RAG over the **SRD 5.1** (CC-BY-4.0), which ships in
 `corpus/srd/` and is indexed in a local ChromaDB.
 All inference currently runs locally through Ollama.
 
-The project **runs**: all four agents are implemented, routing is schema-constrained,
+The project **runs**: the DM narrates and calls engine tools, routing is code,
 and narration streams. The deterministic 5e engine under `src/engine/` is complete and
 tested but not yet wired into the agents (that is Phase 2 of `docs/ROADMAP.md`).
 
@@ -63,7 +64,8 @@ load of 5–11 s. See `docs/KNOWN_ISSUES.md` #24.
 | `src/config.py` | Chroma dir, PDF paths, embedding model name |
 | `src/graph/game_orchestrator.py` | Builds the `StateGraph`, registers agent nodes |
 | `src/graph/game_state.py` | `GameState` TypedDict, default factory, and the `get_party` / `put_party` style accessors that keep engine models as JSON in state |
-| `src/agents/` | `base_agent` (ABC), `supervisor`, `dungeon_master`, `researcher`, `dice_roller` |
+| `src/agents/` | `base_agent` (ABC), `dungeon_master` (the tool loop, two nodes), `researcher` |
+| `src/graph/intake.py` | Routing in code: commands, bare dice, pending rolls, play |
 | `src/engine/` | The 5e engine, no LLM: `character` (sheets), `checks` (d20 resolution), `combatant`, `combat` (encounters), `pregens`. See `docs/ENGINE.md` |
 | `src/srd/` | The SRD JSON as data: `monster()`, `spell()`, `equipment()`, `condition()` with fuzzy names; `bestiary.summon()` |
 | `src/tools/` | The DM's tools over the engine — one function per tool, pydantic args, `run_tool` never raises. See `docs/TOOLS.md` |
@@ -87,18 +89,21 @@ load of 5–11 s. See `docs/KNOWN_ISSUES.md` #24.
   one file, never in an agent. Overrides without editing code:
   `DND_MODEL_<AGENT_TYPE>`, `DND_MODEL_DEFAULT`, `DND_EMBEDDING_MODEL`, `OLLAMA_HOST`.
 - **Prompts live in `src/prompts/prompts.py`** as `UPPER_SNAKE` constants, imported
-  by name. Don't inline system prompts in agent classes. (`DiceRollerAgent._parse_dice_request`
-  currently violates this with an inline parse prompt.)
+  by name. Don't inline system prompts in agent classes.
 - **New agents subclass `BaseAgent`** and implement `process_task(state)` and
   `get_definition()`. `__init__` must call `super().__init__("<agent_type>")` — that
-  string is the node name, the log `agent` field, and the routing token.
+  string is the node name and the log `agent` field. Routing is `intake`'s job:
+  add a branch there, in code.
 - **Every LLM call gets logged** via `self._log_interaction(query, response, metadata)`.
   Keep this when adding agents; the JSONL logs are the only observability here.
 - **Routing is Command-based, not edge-based.** Nodes return
   `Command(goto=..., update={...})`. The return type annotation
-  (`Command[Literal["supervisor"]]`) is what LangGraph reads to infer valid
+  (`Command[Literal["tools", "__end__"]]`) is what LangGraph reads to infer valid
   destinations — it must match what the method actually returns. There is no
   `next_agent` state field; `goto` is the only routing channel.
+- **The model never produces a number that matters.** Anything mechanical goes
+  through a tool (`src/tools/`) into the engine (`src/engine/`). `run_tool` never
+  raises; a refused action comes back as text the model can act on.
 - **Return deltas, not whole state.** A node returns only the keys it changed.
   For `messages` that means only the messages it produced — the `add_messages`
   reducer appends them. Never `dict(state)` and mutate: that is a shallow copy,
@@ -167,7 +172,7 @@ way, so the gate stays fast and runnable offline.
 - `docs/ARCHITECTURE.md` — how a turn flows through the system, module by module
 - `docs/ENGINE.md` — the deterministic 5e engine: models, rules covered, what is left out
 - `docs/TOOLS.md` — the DM's tools: what each does and writes, and why `run_tool` never raises
-- `docs/AGENTS.md` — per-agent contracts, prompts, and routing behavior
+- `docs/DM.md` — the Dungeon Master's tool loop, pending rolls, and what went
 - `docs/RAG_PIPELINE.md` — retrieval, chunking, the index, and the unused CRAG parts
 - `docs/KNOWN_ISSUES.md` — verified bugs and dead code, ranked
 - `docs/REFACTOR_NOTES.md` — direction, measured local-model performance, and what's left

@@ -1,14 +1,25 @@
+"""The graph. Four nodes, no LLM router, no edges but `Command`s.
+
+    intake ──▶ dungeon_master ⇄ tools ──▶ END
+       ├─────▶ researcher ──────────────▶ END        (/rules)
+       └─────▶ END                                    (/roll, /join, dice, help)
+
+`intake` decides in code where a turn goes. The Dungeon Master loops with
+`tools` at most `MAX_TOOL_STEPS` times and always ends with narration.
+"""
+
 import sqlite3
-from typing import Optional
+from typing import Any, Literal, Optional
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import StateGraph
+from langgraph.types import Command
 
-from src.agents.dice_roller import DiceRollerAgent
 from src.agents.dungeon_master import DungeonMaster
 from src.agents.researcher import ResearcherAgent
-from src.agents.supervisor import GameSupervisor
 from src.graph.game_state import GameState
+from src.graph.intake import intake
+from src.utils.dice import RandomSource
 
 DEFAULT_CHECKPOINT_DB = "game_state.db"
 
@@ -26,29 +37,30 @@ def create_sqlite_checkpointer(db_path: str = DEFAULT_CHECKPOINT_DB) -> BaseChec
     return SqliteSaver(conn)
 
 
-def create_game_graph(checkpointer: Optional[BaseCheckpointSaver] = None):
-    """Creates the main game orchestration graph using agent nodes.
+def create_game_graph(
+    checkpointer: Optional[BaseCheckpointSaver] = None,
+    dm_llm: Any = None,
+    researcher: Optional[ResearcherAgent] = None,
+    rng: Optional[RandomSource] = None,
+):
+    """Build and compile the graph.
 
-    There are no explicit edges. Every node returns ``Command(goto=...)`` and
-    LangGraph derives the legal destinations from each ``process_task`` return
-    annotation — so an annotation that disagrees with what the method actually
-    returns is a bug, not a style issue.
-
+    ``dm_llm`` and ``researcher`` exist so tests can drive the whole graph
+    with stubs and no daemon; ``rng`` makes every roll in a session replay.
     Passing a ``checkpointer`` makes state persist across runs; every
-    ``invoke`` then needs a ``config={"configurable": {"thread_id": ...}}``.
+    ``invoke`` then needs ``config={"configurable": {"thread_id": ...}}``.
     """
-    supervisor = GameSupervisor()
-    dungeon_master = DungeonMaster()
-    researcher = ResearcherAgent()
-    dice_roller = DiceRollerAgent()
+    dungeon_master = DungeonMaster(llm=dm_llm, rng=rng)
+    researcher = researcher or ResearcherAgent()
+
+    def intake_node(state: GameState) -> Command[Literal["dungeon_master", "researcher", "__end__"]]:
+        return intake(state, rng=rng)
 
     workflow = StateGraph(GameState)
-
-    workflow.add_node("supervisor", supervisor.process_task)
+    workflow.add_node("intake", intake_node)
     workflow.add_node("dungeon_master", dungeon_master.process_task)
+    workflow.add_node("tools", dungeon_master.run_tools)
     workflow.add_node("researcher", researcher.process_task)
-    workflow.add_node("dice_roller", dice_roller.process_task)
-
-    workflow.set_entry_point("supervisor")
+    workflow.set_entry_point("intake")
 
     return workflow.compile(checkpointer=checkpointer)

@@ -30,10 +30,14 @@ from src.graph.game_state import GameState, create_default_game_state  # noqa: E
 
 
 def _dm_stub(state):
-    """Narrates a fixed line and moves the party somewhere."""
+    """Narrates a fixed line, seats a rogue, and notes where the party is."""
+    from src.engine.pregens import pregen
+    from src.graph.game_state import put_party
+
     return {
         "messages": [AIMessage(content="The door creaks open.", name="dungeon_master")],
-        "game_state": {"location": "the crypt"},
+        "party": put_party({"Kara": pregen("rogue", "p1", "Kara")}),
+        "summary": "in the crypt",
     }
 
 
@@ -87,13 +91,13 @@ def test_the_first_turn_of_a_new_thread_carries_the_default_state():
     turn = seed_turn({"messages": [HumanMessage(content="hi")], "current_task": "hi"}, {})
     defaults = create_default_game_state()
     assert set(defaults) <= set(turn)
-    assert turn["game_state"] == {}
+    assert turn["party"] == {} and turn["summary"] == ""
     assert turn["current_task"] == "hi"
 
 
 def test_a_resumed_turn_carries_only_the_message():
-    """Merging the defaults back in would replace the stored game_state with {}."""
-    existing = {"messages": [HumanMessage(content="earlier")], "game_state": {"location": "the crypt"}}
+    """Merging the defaults back in would wipe the stored party and summary."""
+    existing = {"messages": [HumanMessage(content="earlier")], "summary": "in the crypt"}
     turn = seed_turn({"messages": [HumanMessage(content="hi")], "current_task": "hi"}, existing)
     assert set(turn) == {"messages", "current_task"}
 
@@ -102,16 +106,16 @@ def test_resuming_keeps_the_world_state(graph_and_saver):
     """The bug this PR fixes: main.py used to re-seed on its first turn."""
     graph, _ = graph_and_saver
     config = _play(graph, "c1", "I open the door")
-    assert graph.get_state(config).values["game_state"]["location"] == "the crypt"
+    assert graph.get_state(config).values["summary"] == "in the crypt"
 
     # A new process, same thread: the resumed turn must not carry defaults.
     values = dict(graph.get_state(config).values)
     turn = seed_turn({"messages": [HumanMessage(content="I look around")], "current_task": "..."}, values)
-    assert "game_state" not in turn
+    assert "summary" not in turn and "party" not in turn
 
     graph.invoke(turn, config=config)
     after = graph.get_state(config).values
-    assert after["game_state"]["location"] == "the crypt"
+    assert after["summary"] == "in the crypt" and list(after["party"]) == ["Kara"]
     assert [m.content for m in after["messages"] if isinstance(m, HumanMessage)] == [
         "I open the door", "I look around",
     ]
@@ -128,7 +132,7 @@ def test_listing_shows_every_thread_with_its_turns(graph_and_saver):
     assert set(campaigns) == {"alpha", "beta"}
     assert campaigns["alpha"].turns == 3
     assert campaigns["beta"].turns == 1
-    assert campaigns["alpha"].location == "the crypt"
+    assert campaigns["alpha"].party == ["Kara"]
     assert campaigns["alpha"].last_prompt == "three"
 
 
@@ -149,7 +153,7 @@ def test_listing_an_empty_database_is_empty(graph_and_saver):
 
 def test_summary_tolerates_a_bare_state():
     summary = summarize("t", {})
-    assert (summary.turns, summary.location, summary.last_prompt) == (0, "", "")
+    assert (summary.turns, summary.party, summary.last_prompt) == (0, [], "")
 
 
 # --- recap ------------------------------------------------------------------
@@ -159,7 +163,7 @@ def test_recap_puts_the_player_back_in_the_scene(graph_and_saver):
     config = _play(graph, "c1", "I open the door", "I step in")
     text = recap(graph.get_state(config).values)
     assert "2 turns" in text
-    assert "the crypt" in text
+    assert "Party: Kara." in text
     assert "The door creaks open." in text
 
 
@@ -171,9 +175,8 @@ def test_recap_ignores_other_agents_output():
     values = {
         "messages": [
             HumanMessage(content="roll"),
-            AIMessage(content="🎲 12", name="dice_roller"),
+            AIMessage(content="🎲 12", name="intake"),
         ],
-        "game_state": {},
     }
     assert "🎲" not in recap(values)
 
@@ -194,7 +197,7 @@ def test_format_campaigns_names_each_thread(graph_and_saver):
     graph, saver = graph_and_saver
     _play(graph, "alpha", "one")
     text = format_campaigns(list_campaigns(saver))
-    assert "alpha" in text and "the crypt" in text and "--thread" in text
+    assert "alpha" in text and "Kara" in text and "--thread" in text
 
 
 def test_format_campaigns_when_there_are_none():
