@@ -85,13 +85,52 @@ model: the loop, the cap, narrate-only mode, a refused tool, a pending roll
 resolved by the player, and the two-goblin fight from PR-16 played to its end
 through the graph. None of it needs a daemon.
 
-## Context and cost
+## Memory: the journal
 
-Prompt-eval dominates time-to-first-token on CPU, so the prompt is kept small:
-the scene sheet (~150 tokens for a four-creature fight) replaces most of the
-transcript, `CONTEXT_WINDOW = 6` prior narrative messages are kept, and the
-tool traffic of earlier turns is dropped from the context (it is in state for
-the log). PR-19 adds the rolling summary; PR-20 measures models on tool choice.
+The checkpointer keeps every message; the DM must not read them all. After
+every narration the **`memory`** node (`src/agents/memory.py`) checks the
+transcript: past `MAX_MESSAGES = 24`, the oldest messages beyond
+`KEEP_RECENT = 10` are rendered as a script (players, DM, and tool results as
+`[table]` notes), one `internal`-tagged model call rewrites the campaign
+journal to include what they established, and the folded messages are removed
+from state with `RemoveMessage`. Below the threshold it costs nothing. If the
+call fails nothing is removed — losing history is worse than a longer prompt.
+
+The journal keeps names, places, promises, wounds, loot and open threads, and
+drops dice and numbers (`SUMMARY_PROMPT`). It reaches the DM every turn as
+"The story so far", and `main.py --thread` shows it on resume. A sixty-turn
+scripted session is tested end to end: the prompt stays under budget and a
+name given in turn 2 is in front of the DM at turn 60.
+
+## Context and cost: the order of the prompt
+
+Prompt-eval dominates time-to-first-token on CPU, and Ollama re-evaluates a
+prompt from the first token that differs from the previous call. The system
+prompt plus the bound tool schemas is ~2,500 tokens and never changes, so it
+comes first and stays byte-identical; the scene sheet and the journal change
+every turn, so they come **last**, as a briefing message from `table` just
+before this turn's exchange:
+
+```
+[system]  DUNGEON_MASTER_PROMPT                       ← static, cached
+[recent]  the last 6 narrative messages
+[table]   ## The table right now … ## The story so far … (+ narrate-only note)
+[turn]    the player's message, this turn's tool exchange
+```
+
+Measured on the Intel i9 with `qwen2.5:7b`, PR-19, six turns of history and
+a journal:
+
+| | first token |
+|---|---|
+| Scene sheet and journal inside the system prompt (PR-18) | 57 s |
+| Cold call, any layout (model load + full prefix) | 67 s |
+| Briefing last, journal changed since the previous call | **2.5 s** |
+| Briefing last, a fight started since the previous call | 6.4 s |
+
+The tool schemas are the largest single cost of the prefix; trimming their
+descriptions is cheap and PR-20 can measure it. The tool traffic of earlier
+turns is dropped from the context (it is in state, and in the journal).
 
 Every model call and every tool call is logged through `_log_interaction` with
 a `stage` of `plan`, `tool`, or `narrate`, so a turn can be reconstructed from

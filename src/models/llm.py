@@ -29,6 +29,7 @@ AGENT_MODELS = {
     # candidates on tool-call accuracy before this default moves.
     "researcher": "qwen2.5:7b",       # grounded answers over retrieved text
     "dungeon_master": "qwen2.5:7b",   # narration and tool choice
+    "memory": "qwen2.5:7b",           # folds old messages into the journal (PR-19)
 }
 
 DEFAULT_HOST = "http://localhost:11434"

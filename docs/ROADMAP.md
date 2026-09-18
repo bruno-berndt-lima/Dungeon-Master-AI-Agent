@@ -337,7 +337,7 @@ a stub model that emits scripted tool calls (offline); the step cap is tested;
 a turn where the model emits no tool call still narrates; `grep -rn supervisor
 src/` is empty.
 
-**PR-19 — Memory (M)**
+**PR-19 — Memory (M)** — *landed 2026-09-18. Also reordered the DM prompt so the daemon's prefix cache covers the static part: first token 57 s → 2.5–6 s warm on the Intel CPU (see `DM.md`).*
 `feat/campaign-memory`. Rolling summary: when `messages` exceeds N, an
 `internal`-tagged call folds the oldest into `state["summary"]` and the
 messages are trimmed with `RemoveMessage`. The scene sheet is rendered by the

@@ -107,6 +107,9 @@ def recap(values: Dict[str, Any]) -> str:
         lines.append(f"{summary.turns} turn{'s' if summary.turns != 1 else ''} so far.")
     if summary.party:
         lines.append(f"Party: {', '.join(summary.party)}.")
+    journal = str(values.get("summary") or "").strip()
+    if journal:
+        lines.append(f"The story so far: {journal}")
     narration = _last_of(values.get("messages"), AIMessage, name="dungeon_master")
     if narration:
         lines.append(f"Last from the DM: {narration.strip()}")
