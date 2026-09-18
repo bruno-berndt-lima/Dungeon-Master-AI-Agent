@@ -1,11 +1,34 @@
+"""The REPL. One campaign per run, resumable.
+
+    python main.py                       # start a new campaign
+    python main.py --thread 3f9a1c2e     # pick one up where it left off
+    python main.py --thread tuesday      # any name works; new if unseen
+    python main.py --list                # what is in the checkpoint database
+
+Campaign state lives in the SQLite checkpointer (`game_state.db`), keyed by
+thread id. The REPL is also the development harness for the Discord bot
+(ROADMAP PR-22), where the channel id plays the role of `--thread`.
+"""
+
+import argparse
 import sys
 import traceback
-import uuid
+from typing import Optional, Sequence
 
 from langchain_core.messages import AIMessageChunk, HumanMessage
 
-from src.graph.game_orchestrator import create_game_graph, create_sqlite_checkpointer
-from src.graph.game_state import create_default_game_state
+from src.graph.campaigns import (
+    is_new_campaign,
+    list_campaigns,
+    new_thread_id,
+    recap,
+    seed_turn,
+)
+from src.graph.game_orchestrator import (
+    DEFAULT_CHECKPOINT_DB,
+    create_game_graph,
+    create_sqlite_checkpointer,
+)
 
 EXIT_COMMANDS = {"quit", "exit"}
 
@@ -18,6 +41,41 @@ STREAMING_NODES = {"dungeon_master", "researcher"}
 # A node can make more than one LLM call — the DM narrates, then extracts world
 # state into JSON. Both carry the same node name, so the second is tagged.
 INTERNAL_TAG = "internal"
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Play a D&D 5e campaign with the AI Dungeon Master.")
+    parser.add_argument(
+        "--thread",
+        metavar="ID",
+        help="campaign to resume, or a name for a new one. Omit to start a fresh campaign.",
+    )
+    parser.add_argument(
+        "--list",
+        action="store_true",
+        help="list the campaigns in the checkpoint database and exit.",
+    )
+    parser.add_argument(
+        "--db",
+        default=DEFAULT_CHECKPOINT_DB,
+        help=f"checkpoint database (default: {DEFAULT_CHECKPOINT_DB}).",
+    )
+    return parser
+
+
+def format_campaigns(campaigns) -> str:
+    if not campaigns:
+        return "No campaigns yet. Start one with: python main.py"
+    width = max(len("thread"), *(len(c.thread_id) for c in campaigns))
+    lines = [f"{'thread':{width}}  {'last active':16}  {'turns':>5}  where / last input"]
+    for c in campaigns:
+        when = c.last_active[:16].replace("T", " ")
+        tail = c.location or c.last_prompt
+        if len(tail) > 50:
+            tail = tail[:47] + "..."
+        lines.append(f"{c.thread_id:{width}}  {when:16}  {c.turns:>5}  {tail}")
+    lines.append("\nResume one with: python main.py --thread <thread>")
+    return "\n".join(lines)
 
 
 def _render(message) -> None:
@@ -64,29 +122,25 @@ def _run_turn(game_graph, turn, config) -> dict:
     return streamed
 
 
-def main() -> None:
+def _state_values(game_graph, config) -> dict:
+    """The thread's current state, or {} for a thread that has none yet."""
     try:
-        checkpointer = create_sqlite_checkpointer()
-        game_graph = create_game_graph(checkpointer=checkpointer)
-    except Exception as exc:
-        print(f"Failed to create game graph: {exc}")
-        traceback.print_exc()
-        sys.exit(1)
+        snapshot = game_graph.get_state(config)
+    except Exception:
+        return {}
+    return dict(snapshot.values or {})
 
-    # One thread_id per session. Reuse a previous id to resume that campaign —
-    # the checkpointer restores its full message history and game_state.
-    thread_id = str(uuid.uuid4())
+
+def run_repl(game_graph, thread_id: str) -> None:
     config = {"configurable": {"thread_id": thread_id}}
 
-    print("Initializing D&D adventure...")
-    print(f"Session thread: {thread_id}")
+    values = _state_values(game_graph, config)
+    if is_new_campaign(values):
+        print(f"New campaign. Resume it later with: python main.py --thread {thread_id}")
+    else:
+        print(f"Resuming campaign {thread_id}.")
+        print(recap(values))
     print("Type 'quit' or 'exit' to end the session.\n")
-
-    # The default state seeds the first turn only. Afterwards the checkpointer
-    # holds the state, and each turn passes just the new user message — the
-    # add_messages reducer appends it to the stored history.
-    pending_state = create_default_game_state()
-    seeded = False
 
     while True:
         try:
@@ -101,25 +155,20 @@ def main() -> None:
             print("Ending D&D session. Farewell, adventurer!")
             break
 
-        turn = {
-            "messages": [HumanMessage(content=user_input)],
-            "current_task": user_input,
-        }
-        if not seeded:
-            turn = {**pending_state, **turn}
-            seeded = True
-
-        # How many messages existed before this turn, so we can print only the
-        # new ones. A thread with no checkpoint yet has no values at all.
-        try:
-            snapshot = game_graph.get_state(config)
-            before = len(snapshot.values.get("messages", [])) if snapshot.values else 0
-        except Exception:
-            before = 0
+        # The first turn of a brand-new thread carries the default state under
+        # the new message; every later turn — including the first turn of a
+        # *resumed* session — carries only the message, and the checkpointer
+        # supplies the rest. Re-seeding a resumed thread would wipe game_state.
+        values = _state_values(game_graph, config)
+        before = len(values.get("messages") or [])
+        turn = seed_turn(
+            {"messages": [HumanMessage(content=user_input)], "current_task": user_input},
+            values,
+        )
 
         try:
             streamed = _run_turn(game_graph, turn, config)
-            messages = game_graph.get_state(config).values.get("messages", [])
+            messages = _state_values(game_graph, config).get("messages") or []
         except Exception as exc:
             print(f"\nAn error occurred: {exc}")
             traceback.print_exc()
@@ -149,5 +198,30 @@ def main() -> None:
             _render(message)
 
 
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    args = build_parser().parse_args(argv)
+
+    try:
+        checkpointer = create_sqlite_checkpointer(args.db)
+    except Exception as exc:
+        print(f"Could not open the checkpoint database {args.db!r}: {exc}")
+        return 1
+
+    if args.list:
+        print(format_campaigns(list_campaigns(checkpointer)))
+        return 0
+
+    try:
+        game_graph = create_game_graph(checkpointer=checkpointer)
+    except Exception as exc:
+        print(f"Failed to create game graph: {exc}")
+        traceback.print_exc()
+        return 1
+
+    print("Initializing D&D adventure...")
+    run_repl(game_graph, args.thread or new_thread_id())
+    return 0
+
+
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

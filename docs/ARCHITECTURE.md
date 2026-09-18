@@ -165,9 +165,21 @@ isn't declared — `tests/test_graph_smoke.py` guards the field set.
 `langgraph.checkpoint.sqlite.SqliteSaver`; `create_sqlite_checkpointer()` builds
 one over a long-lived connection. With a checkpointer attached, every `invoke`
 needs `config={"configurable": {"thread_id": ...}}`, and each turn passes only
-the new message — prior history is restored from the checkpoint. `main.py`
-currently mints a fresh `thread_id` per run, so campaigns are not yet resumed
-across sessions even though the storage supports it.
+the new message — prior history is restored from the checkpoint.
+
+**A campaign is a thread** (`src/graph/campaigns.py`, PR-13). `main.py` starts
+a new one under a short id, or resumes one with `--thread <id>`; `--list` shows
+every thread in the database with its turn count, location, and last input,
+read through the checkpointer's own `list()` so the same code serves the async
+saver the Discord bot will use. On resume the REPL prints a recap — location and
+the DM's last line — from state, with no model call.
+
+One rule the resume path depends on: **the default state is seeded only on a
+thread's very first turn.** Every field but `messages` replaces on write, so
+merging `create_default_game_state()` into the first turn of a *resumed*
+session would overwrite the stored `game_state` with `{}` and the campaign
+would forget where the party is. `seed_turn` decides by whether the thread has
+any state yet; `tests/test_campaigns.py` pins it.
 
 ## Module responsibilities
 
