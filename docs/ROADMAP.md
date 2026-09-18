@@ -251,7 +251,7 @@ and record the numbers in `RAG_PIPELINE.md`. Relax `requires-python` to
 `scripts/ingest.py` builds; the three benchmark queries in `RAG_PIPELINE.md`
 still land on the right entry.
 
-**PR-13 — Resume a campaign from the CLI (S)**
+**PR-13 — Resume a campaign from the CLI (S)** — *landed 2026-09-18; also fixed the first-turn re-seeding that would have wiped `game_state` on resume.*
 `feat/cli-resume`. `main.py --thread <id>` and `--list`. Already noted in
 `REFACTOR_NOTES.md` as "one flag away". Keeps the REPL useful as the
 development harness through Phase 3.

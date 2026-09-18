@@ -165,8 +165,7 @@ PR-01 through PR-04 and PR-06 have landed. Of the original plan:
 2. **Citation offsets (#28).** Cited pages are PDF page indices, several behind
    the printed page number. Worth fixing with the next re-index, since a citation
    exists to be checked.
-3. **Resume a campaign.** The checkpointer works; `main.py` mints a fresh
-   `thread_id` per run. One CLI flag.
+3. **Resume a campaign.** Done in PR-13 — `main.py --thread <id>` and `--list`.
 4. **`src/actors/` (#14).** `Player` and `NPC` are type hints only. Now that
    `game_state` carries real world state, populating `players` has a point.
 
@@ -179,5 +178,4 @@ Not scheduled, and independent of the model layer:
   `SUPERVISOR_PROMPT`.
 - **Activate `src/actors/`.** `Player` and `NPC` are type-hint-only. The PR-03
   checkpointer makes `players`/`npcs` worth populating for the first time.
-- **Use the checkpointer for real.** `main.py` generates a fresh `thread_id` per
-  run. Resuming a campaign is one CLI flag away.
+- **Use the checkpointer for real.** Done in PR-13 (`--thread`, `--list`).

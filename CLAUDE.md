@@ -25,6 +25,8 @@ ollama pull llama3.2:3b     # note the tag: "Llama3.2" does NOT resolve
 ollama pull qwen2.5:7b
 ollama pull all-minilm      # embeddings — also served by the daemon
 python main.py              # interactive REPL; type "quit" or "exit" to leave
+python main.py --list       # campaigns in game_state.db
+python main.py --thread ID  # resume one (or name a new one)
 ```
 
 **Python 3.11 or newer.** `src/agents/supervisor.py` uses `Literal[*ROUTING_OPTIONS]`
@@ -57,7 +59,8 @@ load of 5–11 s. See `docs/KNOWN_ISSUES.md` #24.
 
 | Path | Role |
 |---|---|
-| `main.py` | REPL loop; builds state, streams the compiled graph token by token |
+| `main.py` | REPL; `--thread` / `--list` pick a campaign, streams the compiled graph token by token |
+| `src/graph/campaigns.py` | Campaigns as checkpointer threads: ids, listing, recap, first-turn seeding |
 | `src/config.py` | Chroma dir, PDF paths, embedding model name |
 | `src/graph/game_orchestrator.py` | Builds the `StateGraph`, registers agent nodes |
 | `src/graph/game_state.py` | `GameState` TypedDict + default factory |

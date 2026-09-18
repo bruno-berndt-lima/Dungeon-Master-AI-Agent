@@ -50,7 +50,12 @@ python scripts/ingest.py      # build the vector index, ~2 min on CPU, no networ
 python main.py
 ```
 
-Type `quit` or `exit` to leave.
+Type `quit` or `exit` to leave. The campaign is saved as you play:
+
+```bash
+python main.py --list               # every campaign in game_state.db
+python main.py --thread 3f9a1c2e    # pick one up where it left off
+```
 
 ## How a turn works
 
@@ -123,7 +128,7 @@ Generation throughput is the bottleneck, not the architecture: 11.4 tok/s on the
 ## Tests
 
 ```bash
-pytest                        # 225 tests
+pytest                        # 242 tests
 pytest -m "not integration"   # unit only, no dependency stack
 pytest -m slow                # includes a real embedding round-trip (needs the daemon)
 ```
