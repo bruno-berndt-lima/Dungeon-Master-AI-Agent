@@ -21,7 +21,15 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from src.engine.character import Abilities, Ability, Condition, ability_modifier
+from src.engine.character import (
+    SKILL_ABILITY,
+    Abilities,
+    Ability,
+    Character,
+    Condition,
+    Skill,
+    ability_modifier,
+)
 from src.utils.dice import DiceRoller, RandomSource
 
 # "1d6+2", "2d8", "3d6 + 4", "1d4-1" — dice with an optional flat bonus.
@@ -164,6 +172,12 @@ class Combatant(BaseModel):
     languages: str = ""
     conditions: List[Condition] = Field(default_factory=list)
 
+    # Dying, for characters. Monsters simply die at 0 HP.
+    dead: bool = False
+    death_successes: int = Field(0, ge=0, le=3)
+    death_failures: int = Field(0, ge=0, le=3)
+    stable: bool = False
+
     @model_validator(mode="before")
     @classmethod
     def _fill_defaults(cls, data: Any) -> Any:
@@ -276,6 +290,46 @@ class Combatant(BaseModel):
             languages=str(entry.get("languages", "")),
         )
 
+    @classmethod
+    def from_character(cls, character: Character) -> "Combatant":
+        """A player character as it takes part in a fight.
+
+        The sheet stays the source of truth between fights; `combat.sync_party`
+        writes HP, temporary HP, conditions and death back when one ends.
+        Listed saves and skills are filled for every ability and skill so the
+        two kinds of combatant answer the same questions the same way.
+        """
+        attacks = [
+            Attack(
+                name=weapon.name,
+                attack_bonus=character.attack_bonus(weapon),
+                damage=[Damage(dice=weapon.damage_dice, bonus=character.damage_bonus(weapon), damage_type=weapon.damage_type)],
+                ranged=weapon.ranged,
+                desc=f"{'Ranged' if weapon.ranged else 'Melee'} Weapon Attack with a {weapon.name.lower()}.",
+            )
+            for weapon in character.weapons
+        ]
+        return cls(
+            id=character.name,
+            name=character.name,
+            kind="character",
+            player_id=character.player_id,
+            armor_class=character.armor_class,
+            max_hp=character.max_hp,
+            current_hp=character.current_hp,
+            temp_hp=character.temp_hp,
+            abilities=character.abilities,
+            save_bonuses={a: character.save_modifier(a) for a in Ability},
+            skill_bonuses={s.value: character.skill_modifier(s) for s in Skill},
+            speed={"walk": f"{character.speed} ft."},
+            size="Medium",
+            creature_type=f"humanoid ({character.race.lower()})",
+            alignment="",
+            attacks=attacks,
+            conditions=list(character.conditions),
+            dead=character.dead,
+        )
+
     # --- the numbers a fight asks for ---------------------------------------
 
     def ability_modifier(self, ability: Ability) -> int:
@@ -289,8 +343,6 @@ class Combatant(BaseModel):
     def skill_modifier(self, skill: str) -> int:
         """Listed skills are totals; anything else is unproficient — the
         ability is looked up through the character module's table."""
-        from src.engine.character import SKILL_ABILITY, Skill
-
         for listed, value in self.skill_bonuses.items():
             if listed.lower() == str(skill).lower():
                 return value
@@ -302,7 +354,11 @@ class Combatant(BaseModel):
 
     @property
     def is_alive(self) -> bool:
-        return self.current_hp > 0
+        return not self.dead
+
+    @property
+    def is_conscious(self) -> bool:
+        return not self.dead and self.current_hp > 0 and not self.has(Condition.UNCONSCIOUS)
 
     def has(self, condition: Condition) -> bool:
         return Condition(condition) in self.conditions
@@ -315,5 +371,13 @@ class Combatant(BaseModel):
         raise KeyError(f"{self.name} has no attack called {name!r} (has: {available})")
 
     def sheet_line(self) -> str:
+        hp = f"{self.current_hp}/{self.max_hp} HP"
+        if self.temp_hp:
+            hp += f" (+{self.temp_hp} temp)"
         conditions = f", {', '.join(c.value for c in self.conditions)}" if self.conditions else ""
-        return f"{self.id} ({self.name}): AC {self.armor_class}, {self.current_hp}/{self.max_hp} HP{conditions}"
+        if self.dead:
+            conditions += ", dead"
+        elif self.current_hp == 0 and self.kind == "character":
+            conditions += f", dying ({self.death_successes}✓ {self.death_failures}✗{', stable' if self.stable else ''})"
+        who = self.id if self.id == self.name else f"{self.id} ({self.name})"
+        return f"{who}: AC {self.armor_class}, {hp}{conditions}"

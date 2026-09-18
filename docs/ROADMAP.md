@@ -284,7 +284,7 @@ stat block — AC, HP (average or rolled from `hit_dice`), attacks with
 HP 7, a scimitar at +4 for `1d6+2`; a misspelling within edit distance 2 still
 resolves; an unknown name raises.
 
-**PR-16 — Combat tracker (L)**
+**PR-16 — Combat tracker (L)** — *landed 2026-09-18. `GameState` reshaped, `src/actors/` deleted; engine models are stored as JSON dicts with typed accessors (see `ARCHITECTURE.md`).*
 `feat/engine-combat`. `src/engine/combat.py`: `Encounter` with initiative
 (rolled per combatant), round counter, `current()`, `advance()`, `attack(attacker,
 target, weapon)` resolving to-hit vs AC and applying damage, `damage`/`heal`

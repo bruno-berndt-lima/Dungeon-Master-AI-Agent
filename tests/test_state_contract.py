@@ -142,3 +142,48 @@ def test_game_state_survives_a_turn_as_a_dict():
     result = graph.invoke(create_default_game_state())
     assert isinstance(result["game_state"], dict)
     assert result["game_state"]["seen"] is True
+
+
+# --------------------------------------------------------------------------- #
+# Engine models in state (PR-16)
+# --------------------------------------------------------------------------- #
+
+def test_engine_models_are_stored_as_json_and_come_back_typed(tmp_path):
+    """`party` / `encounter` / `pending` hold plain dicts, so any serialiser
+    can checkpoint them; the accessors put the pydantic types back."""
+    import random
+
+    from src.engine.checks import PendingCheck
+    from src.engine.combat import start_encounter
+    from src.engine.pregens import pregen
+    from src.graph.game_state import (
+        get_encounter, get_party, get_pending, put_encounter, put_party, put_pending,
+    )
+    from src.srd.bestiary import summon_group
+
+    party = {"Kara": pregen("rogue", "p1", "Kara")}
+    encounter, _ = start_encounter(list(party.values()), summon_group("goblin", 2), rng=random.Random(1))
+    pending = PendingCheck(player="Kara", kind="check", ability="DEX", skill="Stealth", dc=13)
+
+    conn = sqlite3.connect(str(tmp_path / "cp.db"), check_same_thread=False)
+    try:
+        graph = _one_node_graph(lambda state: {"last_response": "ok"}, checkpointer=SqliteSaver(conn))
+        config = {"configurable": {"thread_id": "engine"}}
+        graph.invoke(
+            {
+                **create_default_game_state(),
+                "messages": [HumanMessage(content="go")],
+                "party": put_party(party),
+                "encounter": put_encounter(encounter),
+                "pending": put_pending(pending),
+            },
+            config=config,
+        )
+        values = graph.get_state(config).values
+        assert isinstance(values["party"]["Kara"], dict)  # stored as JSON
+        assert get_party(values) == party
+        assert get_encounter(values) == encounter
+        assert get_pending(values) == pending
+        assert get_encounter({"encounter": None}) is None and get_pending({}) is None
+    finally:
+        conn.close()

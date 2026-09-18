@@ -23,9 +23,9 @@ as items close.
 | 11 | `get_vectorstore` ignores its argument | **fixed** (PR-07) |
 | 12 | No ingestion entry point | **fixed** (PR-07) |
 | 13 | `src/pipelines/` unused | **fixed** (PR-08) — rewriter wired, generator and grader deleted |
-| 14 | `src/actors/` unused | open — deferred |
+| 14 | `src/actors/` unused | **fixed** (PR-16) — deleted; `src/engine/` is the real model |
 | 15 | Unused declarations | **fixed** — `create_json_llm` (PR-02), `Router`/`State` (PR-04), `DiceRollRequest` (PR-05), `format_docs` (PR-08) |
-| 16 | State keys never written | partial — `last_response` (PR-03) and `game_state` (PR-06) written; three remain |
+| 16 | State keys never written | **fixed** (PR-16) — the five never-written keys are gone; `party` / `encounter` / `pending` / `summary` replace them |
 | 17 | `tests/` are not tests | **fixed** (PR-01) |
 | 18 | pytest config in the wrong table | **fixed** (PR-01) |
 | 19 | `requirements.txt` unpinned | **fixed** (PR-01) |

@@ -128,7 +128,7 @@ Generation throughput is the bottleneck, not the architecture: 11.4 tok/s on the
 ## Tests
 
 ```bash
-pytest                        # 413 tests
+pytest                        # 485 tests
 pytest -m "not integration"   # unit only, no dependency stack
 pytest -m slow                # includes a real embedding round-trip (needs the daemon)
 ```

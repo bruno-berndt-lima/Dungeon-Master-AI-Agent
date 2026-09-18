@@ -191,6 +191,7 @@ class Character(BaseModel):
     conditions: List[Condition] = Field(default_factory=list)
     inventory: List[str] = Field(default_factory=list)
     weapons: List[Weapon] = Field(default_factory=list)
+    dead: bool = False
     notes: str = ""
 
     @model_validator(mode="before")
@@ -275,7 +276,7 @@ class Character(BaseModel):
 
     @property
     def is_conscious(self) -> bool:
-        return self.current_hp > 0 and not self.has(Condition.UNCONSCIOUS)
+        return not self.dead and self.current_hp > 0 and not self.has(Condition.UNCONSCIOUS)
 
     def weapon(self, name: str) -> Weapon:
         for weapon in self.weapons:
@@ -290,6 +291,8 @@ class Character(BaseModel):
         if self.temp_hp:
             hp += f" (+{self.temp_hp} temp)"
         conditions = f", {', '.join(c.value for c in self.conditions)}" if self.conditions else ""
+        if self.dead:
+            conditions += ", dead"
         return (
             f"{self.name} ({self.race} {self.character_class} {self.level}): "
             f"AC {self.armor_class}, {hp}{conditions}"
