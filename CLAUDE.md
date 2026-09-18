@@ -65,7 +65,8 @@ load of 5–11 s. See `docs/KNOWN_ISSUES.md` #24.
 | `src/graph/game_orchestrator.py` | Builds the `StateGraph`, registers agent nodes |
 | `src/graph/game_state.py` | `GameState` TypedDict + default factory |
 | `src/agents/` | `base_agent` (ABC), `supervisor`, `dungeon_master`, `researcher`, `dice_roller` |
-| `src/engine/` | The 5e engine, no LLM: `character` (sheets), `checks` (d20 resolution), `pregens`. See `docs/ENGINE.md` |
+| `src/engine/` | The 5e engine, no LLM: `character` (sheets), `checks` (d20 resolution), `combatant` (monsters), `pregens`. See `docs/ENGINE.md` |
+| `src/srd/` | The SRD JSON as data: `monster()`, `spell()`, `equipment()`, `condition()` with fuzzy names; `bestiary.summon()` |
 | `src/actors/` | `Actor` ABC, `Player`, `NPC` — data models, not yet used by the graph |
 | `src/data/` | `srd_loader` (JSON, default), `loader` (PDF), `processing`, `vectorstore` |
 | `corpus/srd/` | The vendored SRD 5.1 corpus. **Committed** — see `corpus/README.md` |
