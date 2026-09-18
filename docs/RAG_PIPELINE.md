@@ -10,10 +10,11 @@
 | Dimensions | 384 |
 | Distance | L2 |
 | Index | HNSW, `M=16`, `ef_construction=100`, `ef_search=100` |
-| Embeddings | `sentence-transformers/all-MiniLM-L6-v2` via `HuggingFaceEmbeddings` |
+| Embeddings | `all-minilm` (all-MiniLM-L6-v2) served by the Ollama daemon, `OllamaEmbed` in `src/models/llm.py` |
 
 The source is the **SRD 5.1** (CC-BY-4.0), vendored in `corpus/srd/`. Build the
-index once with `python scripts/ingest.py` (~35 s, no network). The three
+index once with `python scripts/ingest.py` (~2 min on the Intel CPU, no network
+beyond the local daemon; `ollama pull all-minilm` first). The three
 commercial rulebooks remain an optional second corpus — see
 `Documents/README.md`.
 
@@ -177,13 +178,48 @@ consulted" rather than claiming each one was used.
    structured output — this becomes straightforward after the provider swap described
    in `docs/REFACTOR_NOTES.md`.
 
-## Embeddings and the provider swap
+## Embeddings
 
-The embedding model runs locally through `sentence-transformers` and is independent of
-whichever chat model you use. Keep it that way during any refactor: the committed
-`chroma_db/` is built from 384-dimensional `all-MiniLM-L6-v2` vectors, and changing
-the embedder means re-indexing the whole corpus from scratch. Swapping the *chat* model
-(`src/models/llm.py`) touches nothing in the index.
+Served by the same Ollama daemon as the chat models (PR-12). `all-minilm` **is**
+`all-MiniLM-L6-v2` — the same weights that used to run through
+`sentence-transformers` — which is why the switch needed no threshold change:
+
+| Query | via sentence-transformers (July) | via Ollama `all-minilm` |
+|---|---|---|
+| "how does sneak attack work for rogues" | 0.590 | 0.590 |
+| "how much damage does a fireball do" | 0.513 | 0.513 |
+| "how does grappling work in combat" | 0.335 | 0.335 |
+
+What the change bought: no torch, no `transformers`, no numpy pin, and no
+"Python 3.12 exactly". What it cost: indexing is ~2 min (109 s measured) instead of ~35 s, because
+the daemon embeds 64 chunks per request on CPU rather than one in-process
+batch. `DND_EMBEDDING_MODEL` overrides the model; `OLLAMA_HOST` picks the daemon
+for embeddings and chat alike.
+
+**`nomic-embed-text` was measured and not adopted.** Over the same 3,082 chunks
+on the Intel CPU, 2026-09-18, eight name-your-entry queries:
+
+| | `all-minilm` | `nomic-embed-text` | `nomic` + task prefixes |
+|---|---|---|---|
+| Dimensions | 384 | 768 | 768 |
+| Index build | 90 s | 503 s | 593 s |
+| Top hit is the named entry | 7/8 | 7/8 | 5/8 |
+| On-topic band | 0.26 – 0.59 | 0.55 – 0.77 | 0.60 – 0.79 |
+| Off-topic band | -0.23 – 0.25 | 0.23 – 0.49 | 0.37 – 0.56 |
+| Casual phrasing (rewrite triggers) | 0.01 | 0.43 – 0.48 | 0.53 – 0.55 |
+
+Tied on hits, 5.6× slower to index, and the prefixes nomic's card recommends
+made it *worse* here. Both missed the same query ("how does grappling work" →
+*Making an Attack*, the grappling rules rank second) and both landed on a
+near-miss for "the shield spell" (a magic item, a monster) — the SRD's `Shield`
+spell entry is short and outranked. The 0.25 threshold sits between the
+`all-minilm` bands with a thin margin on the goblin query (0.26, the lowest
+on-topic score in both July and September); the casual phrasings score ~0.01,
+which is what the rewrite is for.
+
+Changing the embedding model still means re-indexing the whole corpus from
+scratch — a store built with one model cannot be queried with another. Swapping
+the *chat* model touches nothing in the index.
 
 ## Licensing
 

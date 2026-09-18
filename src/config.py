@@ -18,5 +18,5 @@ DOCUMENT_PATHS = {
     "Monster Manual": "Documents/Monster_Manual_5e.pdf",
 }
 
-# Embedding Model
-EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
+# The embedding model lives with the chat models in src/models/llm.py
+# (`EMBEDDING_MODEL`), since both are served by the same Ollama daemon.

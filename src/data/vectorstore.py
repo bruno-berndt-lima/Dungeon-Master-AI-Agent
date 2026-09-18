@@ -5,9 +5,9 @@ from typing import List, Optional
 
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
-from langchain_huggingface import HuggingFaceEmbeddings
 
-from ..config import CHROMA_DB_DIRECTORY, EMBEDDING_MODEL_NAME
+from ..config import CHROMA_DB_DIRECTORY
+from ..models.llm import OllamaEmbed, create_embedding_model
 
 logger = logging.getLogger(__name__)
 
@@ -16,13 +16,13 @@ class VectorStoreMissingError(FileNotFoundError):
     """No index on disk, and the caller asked to read rather than build one."""
 
 
-def create_embeddings(model_name: str = EMBEDDING_MODEL_NAME) -> HuggingFaceEmbeddings:
-    """The embedding model. Changing it invalidates the entire index.
-
-    `all-MiniLM-L6-v2` produces 384-dim vectors, and the committed store is built
-    from them — a store built with one model cannot be queried with another.
+def create_embeddings(model_name: Optional[str] = None) -> OllamaEmbed:
+    """The embedding model, served by the Ollama daemon. Changing it
+    invalidates the entire index — a store built with one model cannot be
+    queried with another. The model is chosen in `src/models/llm.py`, next to
+    the chat models, and overridable with `DND_EMBEDDING_MODEL`.
     """
-    return HuggingFaceEmbeddings(model_name=model_name)
+    return create_embedding_model(model_name)
 
 
 def load_vectorstore(persist_directory: str = CHROMA_DB_DIRECTORY) -> Chroma:

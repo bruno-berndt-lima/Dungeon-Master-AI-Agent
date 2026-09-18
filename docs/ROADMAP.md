@@ -240,7 +240,7 @@ in `src/data/loader.py`; drop `langchain` and `langchain-community` from
 `requirements.txt`; bump `langgraph` and `langchain-core` to current. Acceptance:
 no `langchain_community` import, no deprecation warning in `pytest`, suite green.
 
-**PR-12 — Embeddings through Ollama (M)**
+**PR-12 — Embeddings through Ollama (M)** — *landed 2026-09-18 with `all-minilm`, not nomic; see the measurement in `RAG_PIPELINE.md`.*
 `refactor/ollama-embeddings`. `create_embeddings()` returns `OllamaEmbeddings`
 (`nomic-embed-text`; `all-minilm` if the index should stay 384-dim). Delete the
 `torch` / `transformers` / `numpy` / `sentence-transformers` /

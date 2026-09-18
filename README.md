@@ -34,8 +34,8 @@ Ask a D&D question: roll 2d6+3 for damage
 
 ## Getting started
 
-Needs **Python 3.12 specifically** — see [`CLAUDE.md`](CLAUDE.md) for the two
-independent constraints that pin it.
+Needs **Python 3.11 or newer** (3.12 and 3.13 verified). No torch: embeddings
+are served by the same Ollama daemon as the chat models.
 
 ```bash
 python3.12 -m venv venv && source venv/bin/activate
@@ -44,8 +44,9 @@ pip install -r requirements.txt
 ollama serve &                # or launch Ollama.app
 ollama pull llama3.2:3b       # note the tag: "Llama3.2" does not resolve
 ollama pull qwen2.5:7b
+ollama pull all-minilm        # embeddings run through Ollama too
 
-python scripts/ingest.py      # build the vector index, ~35s, no network
+python scripts/ingest.py      # build the vector index, ~2 min on CPU, no network
 python main.py
 ```
 
@@ -122,9 +123,9 @@ Generation throughput is the bottleneck, not the architecture: 11.4 tok/s on the
 ## Tests
 
 ```bash
-pytest                        # 218 tests
+pytest                        # 225 tests
 pytest -m "not integration"   # unit only, no dependency stack
-pytest -m slow                # includes a real embedding round-trip
+pytest -m slow                # includes a real embedding round-trip (needs the daemon)
 ```
 
 Nothing in the suite calls a model, so the gate stays fast and runs offline.

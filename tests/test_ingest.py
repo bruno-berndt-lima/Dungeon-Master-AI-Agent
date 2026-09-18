@@ -162,8 +162,19 @@ def test_langchain_community_is_gone():
 def test_ingest_round_trip(tmp_path):
     """load -> split -> embed -> query, on PDFs built here.
 
-    Downloads/loads the embedding model, so it is opt-in: `pytest -m slow`.
+    Embeds through the Ollama daemon, so it is opt-in (`pytest -m slow`) and
+    skips — rather than fails — when no daemon or no embedding model is there.
     """
+    from src.models.llm import OllamaUnavailableError, list_installed_models, resolve_embedding_model
+
+    try:
+        installed = list_installed_models()
+    except OllamaUnavailableError as exc:
+        pytest.skip(str(exc))
+    wanted = resolve_embedding_model()
+    if not any(tag.split(":")[0] == wanted.split(":")[0] for tag in installed):
+        pytest.skip(f"embedding model {wanted!r} not pulled")
+
     pymupdf = pytest.importorskip("pymupdf")
     from src.data.loader import load_documents
 
